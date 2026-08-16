@@ -48,5 +48,5 @@ Sale ingestion is idempotent, tracks match confidence/method, tries exact listin
 - Google OAuth read-only Gmail connection with CSRF state check
 - AES-256-GCM encrypted token storage
 - Gmail sync and marketplace sale ingestion
-- 20-minute scheduled Gmail sync endpoint
+- Manual Gmail sync on Vercel Hobby; frequent automated scheduling can be added separately
 - Persistent PostgreSQL production database
