@@ -50,3 +50,5 @@ Sale ingestion is idempotent, tracks match confidence/method, tries exact listin
 - Gmail sync and marketplace sale ingestion
 - Manual Gmail sync on Vercel Hobby; frequent automated scheduling can be added separately
 - Persistent PostgreSQL production database
+
+OAuth production credentials refreshed.
