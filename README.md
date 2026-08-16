@@ -52,3 +52,4 @@ Sale ingestion is idempotent, tracks match confidence/method, tries exact listin
 - Persistent PostgreSQL production database
 
 OAuth production credentials refreshed.
+OAuth client ID whitespace cleaned for production.
