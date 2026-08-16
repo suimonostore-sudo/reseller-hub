@@ -1,0 +1,14 @@
+"use client";
+import {useEffect,useState} from "react";
+export default function ShippingLabels(){
+ const [labels,setLabels]=useState<any[]>([]),[msg,setMsg]=useState("");
+ async function load(){setLabels(await fetch("/api/shipping-labels").then(r=>r.json()));}
+ useEffect(()=>{load()},[]);
+ async function upload(e:any,source:string){const f=e.target.files?.[0];if(!f)return;const d=new FormData();d.append("file",f);d.append("source",source);const r=await fetch("/api/shipping-labels/upload",{method:"POST",body:d});const x=await r.json();setMsg(r.ok?`Imported ${x.created} label record(s).`:(x.error||"Upload failed"));load();e.target.value="";}
+ function print(l:any){const w=window.open("","_blank");if(!w)return;const sku=l.skuPrinted||l.sale?.lines?.[0]?.inventoryItem?.sku||l.buyerPrinted||"NEEDS MATCH";w.document.write(`<html><style>@page{size:4in 6in;margin:0}body{font-family:Arial;margin:0}.p{width:4in;height:6in;padding:.3in;box-sizing:border-box}.sku{font-size:28px;font-weight:800}.track{font-family:monospace;font-size:22px;margin-top:25px}</style><div class=p><div class=sku>${sku}</div><div>${l.buyerPrinted||l.sale?.buyerUsername||""}</div><div>${l.trackingNumber||""}</div><div class=track>${l.trackingNumber||"NO-BARCODE"}</div></div><script>print()</script></html>`);w.document.close();}
+ return <main className="shell"><header className="header"><div><a className="back" href="/pick-pack">← Pick & Pack</a><h1>Shipping Labels</h1><p>Import labels and prepare them for the 4×6 workflow.</p></div></header>
+ <section className="cards"><div className="card"><span>Total</span><strong>{labels.length}</strong></div><div className="card"><span>Matched</span><strong>{labels.filter(x=>x.status==="MATCHED").length}</strong></div><div className="card"><span>Needs Match</span><strong>{labels.filter(x=>x.status==="UNMATCHED").length}</strong></div></section>
+ <section className="panel"><div className="uploadGrid">
+ {["BULK_PDF","SCAN_SHEET","INDIVIDUAL"].map(s=><label className="uploadBox" key={s}><b>{s==="BULK_PDF"?"Upload Bulk Label PDF":s==="SCAN_SHEET"?"Upload Scan Sheet":"Upload Individual Label"}</b><span>Store the source file and create label records.</span><input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={e=>upload(e,s)}/></label>)}</div>{msg&&<div className="successMessage">{msg}</div>}</section>
+ <section className="panel"><table><thead><tr><th>Source</th><th>File</th><th>SKU</th><th>Buyer</th><th>Tracking</th><th>Status</th><th></th></tr></thead><tbody>{labels.map(l=><tr key={l.id}><td>{l.source}</td><td>{l.fileName}</td><td><b>{l.skuPrinted||l.sale?.lines?.[0]?.inventoryItem?.sku||"NEEDS MATCH"}</b></td><td>{l.buyerPrinted||l.sale?.buyerUsername||"—"}</td><td>{l.trackingNumber||"—"}</td><td>{l.status}</td><td><button className="linkBtn" onClick={()=>print(l)}>Print 4×6</button></td></tr>)}</tbody></table></section></main>
+}

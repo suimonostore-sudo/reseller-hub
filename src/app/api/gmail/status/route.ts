@@ -1,0 +1,2 @@
+import {NextResponse} from "next/server";import {prisma} from "@/src/lib/prisma";
+export async function GET(){const a=await prisma.connectedAccount.findUnique({where:{provider:"gmail"}}),last=await prisma.syncRun.findFirst({where:{source:"gmail"},orderBy:{startedAt:"desc"}});return NextResponse.json({configured:!!(process.env.GOOGLE_CLIENT_ID&&process.env.GOOGLE_CLIENT_SECRET&&process.env.GOOGLE_REDIRECT_URI&&process.env.APP_ENCRYPTION_KEY),connected:!!a?.refreshTokenEnc,lastSync:last})}

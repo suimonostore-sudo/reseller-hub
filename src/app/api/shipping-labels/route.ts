@@ -1,0 +1,2 @@
+import {NextResponse} from "next/server"; import {prisma} from "@/src/lib/prisma";
+export async function GET(){return NextResponse.json(await prisma.shippingLabel.findMany({include:{sale:{include:{lines:{include:{inventoryItem:true}}}}},orderBy:{createdAt:"desc"}}));}

@@ -1,0 +1,2 @@
+import {NextResponse} from "next/server";import crypto from "crypto";import {authUrl} from "@/src/lib/gmail";
+export async function GET(){try{const state=crypto.randomBytes(16).toString("hex");const r=NextResponse.redirect(authUrl(state));r.cookies.set("gmail_oauth_state",state,{httpOnly:true,sameSite:"lax",secure:process.env.NODE_ENV==="production",maxAge:600});return r}catch(e:any){return NextResponse.json({error:e.message},{status:500})}}

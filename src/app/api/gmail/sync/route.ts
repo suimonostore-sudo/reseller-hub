@@ -1,0 +1,2 @@
+import {NextResponse} from "next/server";import {syncGmail} from "@/src/lib/gmail-sync";
+export async function POST(){try{return NextResponse.json(await syncGmail())}catch(e:any){return NextResponse.json({error:e.message},{status:500})}}
