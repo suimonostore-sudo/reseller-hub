@@ -3,7 +3,9 @@ import { prisma } from "./prisma";
 
 export const gmailScope="https://www.googleapis.com/auth/gmail.readonly";
 export function oauthConfig(){
- const clientId=process.env.GOOGLE_CLIENT_ID,secret=process.env.GOOGLE_CLIENT_SECRET,redirect=process.env.GOOGLE_REDIRECT_URI;
+ const clientId=process.env.GOOGLE_CLIENT_ID?.trim();
+ const secret=process.env.GOOGLE_CLIENT_SECRET?.trim();
+ const redirect=process.env.GOOGLE_REDIRECT_URI?.trim();
  if(!clientId||!secret||!redirect) throw new Error("Google OAuth is not configured");
  return {clientId,secret,redirect};
 }
