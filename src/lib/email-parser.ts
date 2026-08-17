@@ -20,6 +20,7 @@ export function normalizeEmailText(input:string){
     .replace(/<[^>]+>/g," ");
  s=decodeEntities(s)
    .replace(/[\u00ad\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g,"")
+   .replace(/&zwnj;/gi,"")
    .replace(/[ \t]+/g," ")
    .replace(/\n\s*\n+/g,"\n")
    .trim();
@@ -37,8 +38,8 @@ export function marketplaceFrom(sender:string,subject:string):Platform|null{
 
 function looksLikeSale(platform:Platform,subject:string,body:string){
  const s=subject.toLowerCase(), b=body.toLowerCase();
- if(platform===Platform.EBAY) return s.startsWith("you made the sale for ") || /order total|sold for|buyer paid/.test(b);
- if(platform===Platform.DEPOP) return /sale confirmation|it'?s time to ship/.test(s) || /you'?ve made a sale|you sold|buyer paid|sale total/.test(b);
+ if(platform===Platform.EBAY) return s.startsWith("you made the sale for ") || /sold:\s*\$|buyer paid/.test(b);
+ if(platform===Platform.DEPOP) return /sale confirmation|it'?s time to ship/.test(s) || /you'?ve made a sale|order details|item price/.test(b);
  if(platform===Platform.POSHMARK) return /congratulations.*sale|you made a sale|sold/.test(s) || /order total|your earnings|buyer/.test(b);
  if(platform===Platform.MERCARI) return /you made a sale|item sold|sold/.test(s) || /order total|your earnings|buyer/.test(b);
  return false;
@@ -51,14 +52,13 @@ export function parseMarketplaceSale(platform:Platform,subject:string,body:strin
 
  let title="";
  if(platform===Platform.EBAY){
-   title=cleanTitle(first(normalizedBody,[
-     /(?:item|listing)(?: title)?:\s*([^\n]+)/i,
-     /you made the sale for\s+([^\n]+)/i
-   ]));
-   if(!title) title=cleanTitle(first(subject,[/^You made the sale for\s+(.+)$/i]));
+   title=cleanTitle(first(subject,[/^You made the sale for\s+(.+)$/i]));
+   if(!title) title=cleanTitle(first(normalizedBody,[/(?:item|listing)(?: title)?:\s*([^\n]+)/i]));
  }
  if(platform===Platform.DEPOP){
    title=cleanTitle(first(normalizedBody,[
+     /order details\s+(?:image\s+)?(.+?)\s+Size:/i,
+     /order details\s+(?:image\s+)?(.+?)\s+\$[\d,.]+/i,
      /(?:item|listing)(?: title)?:\s*([^\n]+)/i,
      /you sold\s+([^\n]+)/i,
      /sold item\s*:?\s*([^\n]+)/i
@@ -69,21 +69,36 @@ export function parseMarketplaceSale(platform:Platform,subject:string,body:strin
  }
 
  const amount=money(first(text,[
+   /sold:\s*\$?([\d,.]+)/i,
+   /item price\s*\$?([\d,.]+)/i,
+   /order details[\s\S]{0,180}?\$([\d,.]+)/i,
    /(?:order total|sale total|sold for|buyer paid|sale price|order amount|total):?\s*\$?([\d,.]+)/i,
    /(?:you earned|your earnings):?\s*\$?([\d,.]+)/i,
    /(?:price):?\s*\$?([\d,.]+)/i,
    /\$([\d,.]+)\s+(?:sale|sold)/i
  ]));
  const buyer=first(text,[
-   /(?:buyer|sold to|username):\s*@?([^\n<]+)/i,
+   /buyer:\s*@?([^\n<]+?)(?=\s+Quantity sold:|\n|$)/i,
+   /buyer info\s+(?:[a-z]\s+)?@?([^\s]+)/i,
+   /buyer\s+(?:buyer profile picture\s+)?@?([^\s]+)/i,
+   /(?:sold to|username):\s*@?([^\n<]+)/i,
    /sale confirmation for\s+@?([^\.\n]+)/i,
-   /ship to\s+@?([^\n<]+)/i,
    /show\s+@([^\s]+)\s+some\s+5-star/i
  ]);
- const order=first(text,[/(?:order|transaction)(?: id| number| #)?:\s*([A-Z0-9-]+)/i]);
+ const order=first(text,[
+   /order:\s*([0-9-]+)/i,
+   /(?:order|transaction)(?: id| number| #)?:\s*([A-Z0-9-]+)/i
+ ]);
  const listing=first(text,[/(?:listing|item)(?: id| number| #):\s*([A-Z0-9-]+)/i,/\((\d{9,})\)\s*$/]);
- const fees=money(first(text,[/(?:fee|fees|selling fee|platform fee):\s*\$?([\d,.]+)/i]));
- const shipping=money(first(text,[/(?:shipping cost|shipping fee|shipping):\s*\$?([\d,.]+)/i]));
+ const fees=money(first(text,[
+   /payment processing fee[^$−-]*[−-]?\$?([\d,.]+)/i,
+   /boosting fee[^$−-]*[−-]?\$?([\d,.]+)/i,
+   /(?:fee|fees|selling fee|platform fee):\s*\$?([\d,.]+)/i
+ ]));
+ const shipping=money(first(text,[
+   /shipping:\s*\$?([\d,.]+)/i,
+   /(?:shipping cost|shipping fee):\s*\$?([\d,.]+)/i
+ ]));
 
  if(!title || amount<=0) return null;
  return {platform,title,saleAmount:amount,buyerUsername:buyer||null,externalOrderId:order||null,externalListingId:listing||null,fees,shippingCost:shipping,quantity:1};
