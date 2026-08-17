@@ -20,7 +20,7 @@ export async function GET() {
   });
 
   const saleLike = rows
-    .filter((r) => /you made the sale|sale confirmation|sold|it's time to ship/i.test(r.subject))
+    .filter((r) => /you made the sale|sale confirmation|sold|it's time to ship/i.test(r.subject ?? ""))
     .slice(0, 12)
     .map((r) => ({
       sender: r.sender,
