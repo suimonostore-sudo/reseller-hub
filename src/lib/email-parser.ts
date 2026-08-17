@@ -3,6 +3,28 @@ import { Platform } from "@prisma/client";
 function money(v?:string){return v?Number(v.replace(/[$,]/g,"")):0}
 function first(text:string,patterns:RegExp[]){for(const p of patterns){const m=text.match(p);if(m?.[1])return m[1].trim()}return ""}
 function cleanTitle(v:string){return v.replace(/\s*\.\.\.$/,"").replace(/\s*\([^)]*\)\s*$/," ").trim()}
+function decodeEntities(s:string){
+ return s
+  .replace(/&nbsp;/gi," ").replace(/&amp;/gi,"&").replace(/&quot;/gi,'"').replace(/&#39;|&apos;/gi,"'")
+  .replace(/&lt;/gi,"<").replace(/&gt;/gi,">")
+  .replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(Number(n)))
+  .replace(/&#x([0-9a-f]+);/gi,(_,n)=>String.fromCharCode(parseInt(n,16)));
+}
+export function normalizeEmailText(input:string){
+ let s=input||"";
+ s=s.replace(/<!--[\s\S]*?-->/g," ")
+    .replace(/<style[\s\S]*?<\/style>/gi," ")
+    .replace(/<script[\s\S]*?<\/script>/gi," ")
+    .replace(/<br\s*\/?\s*>/gi,"\n")
+    .replace(/<\/(p|div|tr|li|td|h[1-6])>/gi,"\n")
+    .replace(/<[^>]+>/g," ");
+ s=decodeEntities(s)
+   .replace(/[\u00ad\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g,"")
+   .replace(/[ \t]+/g," ")
+   .replace(/\n\s*\n+/g,"\n")
+   .trim();
+ return s;
+}
 
 export function marketplaceFrom(sender:string,subject:string):Platform|null{
  const s=(sender+" "+subject).toLowerCase();
@@ -16,22 +38,31 @@ export function marketplaceFrom(sender:string,subject:string):Platform|null{
 function looksLikeSale(platform:Platform,subject:string,body:string){
  const s=subject.toLowerCase(), b=body.toLowerCase();
  if(platform===Platform.EBAY) return s.startsWith("you made the sale for ") || /order total|sold for|buyer paid/.test(b);
- if(platform===Platform.DEPOP) return /sale confirmation|it'?s time to ship/.test(s) || /you sold|buyer paid|sale total/.test(b);
+ if(platform===Platform.DEPOP) return /sale confirmation|it'?s time to ship/.test(s) || /you'?ve made a sale|you sold|buyer paid|sale total/.test(b);
  if(platform===Platform.POSHMARK) return /congratulations.*sale|you made a sale|sold/.test(s) || /order total|your earnings|buyer/.test(b);
  if(platform===Platform.MERCARI) return /you made a sale|item sold|sold/.test(s) || /order total|your earnings|buyer/.test(b);
  return false;
 }
 
 export function parseMarketplaceSale(platform:Platform,subject:string,body:string){
- const text=`${subject}\n${body}`.replace(/\r/g,"");
- if(!looksLikeSale(platform,subject,body)) return null;
+ const normalizedBody=normalizeEmailText(body);
+ const text=`${subject}\n${normalizedBody}`.replace(/\r/g,"");
+ if(!looksLikeSale(platform,subject,normalizedBody)) return null;
 
  let title="";
  if(platform===Platform.EBAY){
-   title=cleanTitle(first(subject,[/^You made the sale for\s+(.+)$/i]));
+   title=cleanTitle(first(normalizedBody,[
+     /(?:item|listing)(?: title)?:\s*([^\n]+)/i,
+     /you made the sale for\s+([^\n]+)/i
+   ]));
+   if(!title) title=cleanTitle(first(subject,[/^You made the sale for\s+(.+)$/i]));
  }
  if(platform===Platform.DEPOP){
-   title=cleanTitle(first(text,[/(?:item|listing)(?: title)?:\s*([^\n]+)/i,/you sold\s+([^\n]+)/i,/sold item\s*:?\s*([^\n]+)/i]));
+   title=cleanTitle(first(normalizedBody,[
+     /(?:item|listing)(?: title)?:\s*([^\n]+)/i,
+     /you sold\s+([^\n]+)/i,
+     /sold item\s*:?\s*([^\n]+)/i
+   ]));
  }
  if(!title){
    title=cleanTitle(first(text,[/item(?: title)?:\s*([^\n]+)/i,/you sold[:\s]+([^\n]+)/i,/sold[:\s]+([^\n]+)/i,/listing:\s*([^\n]+)/i]));
@@ -40,12 +71,14 @@ export function parseMarketplaceSale(platform:Platform,subject:string,body:strin
  const amount=money(first(text,[
    /(?:order total|sale total|sold for|buyer paid|sale price|order amount|total):?\s*\$?([\d,.]+)/i,
    /(?:you earned|your earnings):?\s*\$?([\d,.]+)/i,
+   /(?:price):?\s*\$?([\d,.]+)/i,
    /\$([\d,.]+)\s+(?:sale|sold)/i
  ]));
  const buyer=first(text,[
    /(?:buyer|sold to|username):\s*@?([^\n<]+)/i,
    /sale confirmation for\s+@?([^\.\n]+)/i,
-   /ship to\s+@?([^\n<]+)/i
+   /ship to\s+@?([^\n<]+)/i,
+   /show\s+@([^\s]+)\s+some\s+5-star/i
  ]);
  const order=first(text,[/(?:order|transaction)(?: id| number| #)?:\s*([A-Z0-9-]+)/i]);
  const listing=first(text,[/(?:listing|item)(?: id| number| #):\s*([A-Z0-9-]+)/i,/\((\d{9,})\)\s*$/]);
