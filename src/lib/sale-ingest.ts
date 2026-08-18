@@ -11,8 +11,9 @@ function tokenScore(a:string,b:string){
 
 export async function findBestMatch(platform:Platform, externalListingId:string|undefined, title:string, sku?:string){
   if(sku){
-    const exactSku=await prisma.inventoryItem.findUnique({where:{sku:sku.trim()}});
-    if(exactSku) return {item:exactSku,method:"SKU",confidence:1};
+    const cleanedSku=sku.trim();
+    const exactSku=await prisma.inventoryItem.findFirst({where:{OR:[{sku:cleanedSku},{sourceSku:cleanedSku}]}});
+    if(exactSku) return {item:exactSku,method:exactSku.sku===cleanedSku?"SKU":"SOURCE_SKU",confidence:1};
   }
 
   if(externalListingId){
