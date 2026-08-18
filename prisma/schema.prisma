@@ -38,6 +38,7 @@ model BulkBuy {
 model InventoryItem {
   id            Int        @id @default(autoincrement())
   sku           String     @unique
+  sourceSku     String?
   title         String
   quantity      Int        @default(1)
   unlisted      Boolean    @default(false)
