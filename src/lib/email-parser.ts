@@ -45,6 +45,12 @@ function looksLikeSale(platform:Platform,subject:string,body:string){
  return false;
 }
 
+function feeAfterLabel(text:string,label:string){
+ const clean=text.replace(/https?:\/\/\S+/gi," ");
+ const re=new RegExp(label+"[\\s\\S]{0,160}?[−-]\\s*\\$?([\\d,.]+)","i");
+ return money(first(clean,[re]));
+}
+
 export function parseMarketplaceSale(platform:Platform,subject:string,body:string){
  const normalizedBody=normalizeEmailText(body);
  const text=`${subject}\n${normalizedBody}`.replace(/\r/g,"");
@@ -94,7 +100,8 @@ export function parseMarketplaceSale(platform:Platform,subject:string,body:strin
    /just sold to\s+@([^\s]+)\s+on poshmark/i,
    /buyer:\s*@?([^\n<]+?)(?=\s+Quantity sold:|\n|$)/i,
    /buyer info\s+(?:[a-z]\s+)?@?([^\s]+)/i,
-   /buyer\s+(?:buyer profile picture\s+)?@?([^\s]+)/i,
+   /buyer\s+(?:buyer profile picture\s+)?[a-z]\s+@?([A-Za-z0-9_.-]+)\s+image/i,
+   /buyer\s+buyer profile picture\s+@?([A-Za-z0-9_.-]+)\s+image/i,
    /(?:sold to|username):\s*@?([^\n<]+)/i,
    /sale confirmation for\s+@?([^\.\n]+)/i,
    /show\s+@([^\s]+)\s+some\s+5-star/i
@@ -109,8 +116,8 @@ export function parseMarketplaceSale(platform:Platform,subject:string,body:strin
    /\bSKU\s*:\s*([^\n]+?)(?=\s+\$[\d,.]+|\s+Your Earnings|\s+Order|\n|$)/i,
    /\bSeller SKU\s*:\s*([^\n]+)/i
  ]);
- const processingFee=money(first(text,[/payment processing fee[^$−-]*[−-]?\$?([\d,.]+)/i]));
- const boostingFee=money(first(text,[/boosting fee[^$−-]*[−-]?\$?([\d,.]+)/i]));
+ const processingFee=feeAfterLabel(text,"payment processing fee");
+ const boostingFee=feeAfterLabel(text,"boosting fee");
  const genericFee=money(first(text,[/(?:fee|fees|selling fee|platform fee):\s*\$?([\d,.]+)/i]));
  const fees=(processingFee||boostingFee)?processingFee+boostingFee:genericFee;
  const shipping=money(first(text,[
