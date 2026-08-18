@@ -1,4 +1,3 @@
-
 import { prisma } from "@/src/lib/prisma";
 import { Platform, SaleStatus } from "@prisma/client";
 
@@ -10,7 +9,12 @@ function tokenScore(a:string,b:string){
   return hit/Math.max(A.size,B.size);
 }
 
-export async function findBestMatch(platform:Platform, externalListingId:string|undefined, title:string){
+export async function findBestMatch(platform:Platform, externalListingId:string|undefined, title:string, sku?:string){
+  if(sku){
+    const exactSku=await prisma.inventoryItem.findUnique({where:{sku:sku.trim()}});
+    if(exactSku) return {item:exactSku,method:"SKU",confidence:1};
+  }
+
   if(externalListingId){
     const exact=await prisma.listing.findUnique({
       where:{platform_externalId:{platform,externalId:externalListingId}},
@@ -54,7 +58,7 @@ export async function ingestSale(input:any){
   const existing=await prisma.sale.findUnique({where:{ingestionKey},include:{lines:{include:{inventoryItem:true}}}});
   if(existing) return {sale:existing,deduped:true};
 
-  const match=await findBestMatch(platform,input.externalListingId,input.title);
+  const match=await findBestMatch(platform,input.externalListingId,input.title,input.sku);
   const item=match?.item??null;
 
   if(item && item.quantity<qty){
