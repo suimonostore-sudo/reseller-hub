@@ -2,7 +2,7 @@ import { Platform } from "@prisma/client";
 
 function money(v?:string){return v?Number(v.replace(/[$,]/g,"")):0}
 function first(text:string,patterns:RegExp[]){for(const p of patterns){const m=text.match(p);if(m?.[1])return m[1].trim()}return ""}
-function cleanTitle(v:string){return v.replace(/\s*\.\.\.$/,"").replace(/\s*\([^)]*\)\s*$/," ").trim()}
+function cleanTitle(v:string){return v.replace(/^["“]|["”]$/g,"").replace(/\s*\.\.\.$/,"").replace(/\s*\([^)]*\)\s*$/," ").trim()}
 function decodeEntities(s:string){
  return s
   .replace(/&nbsp;/gi," ").replace(/&amp;/gi,"&").replace(/&quot;/gi,'"').replace(/&#39;|&apos;/gi,"'")
@@ -40,7 +40,7 @@ function looksLikeSale(platform:Platform,subject:string,body:string){
  const s=subject.toLowerCase(), b=body.toLowerCase();
  if(platform===Platform.EBAY) return s.startsWith("you made the sale for ") || /sold:\s*\$|buyer paid/.test(b);
  if(platform===Platform.DEPOP) return /sale confirmation|it'?s time to ship/.test(s) || /you'?ve made a sale|order details|item price/.test(b);
- if(platform===Platform.POSHMARK) return /congratulations.*sale|you made a sale|sold/.test(s) || /order total|your earnings|buyer/.test(b);
+ if(platform===Platform.POSHMARK) return /just sold to|congratulations.*sale|you made a sale|sold/.test(s) || /order total|your earnings|buyer/.test(b);
  if(platform===Platform.MERCARI) return /you made a sale|item sold|sold|ship your item|time to ship|congratulations/i.test(s) || /you made a sale|item sold|order total|your earnings|buyer paid|ship your item|sale price/i.test(b);
  return false;
 }
@@ -63,6 +63,10 @@ export function parseMarketplaceSale(platform:Platform,subject:string,body:strin
      /you sold\s+([^\n]+)/i,
      /sold item\s*:?\s*([^\n]+)/i
    ]));
+ }
+ if(platform===Platform.POSHMARK){
+   title=cleanTitle(first(subject,[/^["“](.+?)["”]\s+just sold to\s+@/i]));
+   if(!title) title=cleanTitle(first(normalizedBody,[/you just sold\s+["“](.+?)["”]\s+on poshmark/i,/item price\s+(.+?)\s+size:/i]));
  }
  if(platform===Platform.MERCARI){
    title=cleanTitle(first(text,[
@@ -87,6 +91,7 @@ export function parseMarketplaceSale(platform:Platform,subject:string,body:strin
    /\$([\d,.]+)\s+(?:sale|sold)/i
  ]));
  const buyer=first(text,[
+   /just sold to\s+@([^\s]+)\s+on poshmark/i,
    /buyer:\s*@?([^\n<]+?)(?=\s+Quantity sold:|\n|$)/i,
    /buyer info\s+(?:[a-z]\s+)?@?([^\s]+)/i,
    /buyer\s+(?:buyer profile picture\s+)?@?([^\s]+)/i,
@@ -95,6 +100,7 @@ export function parseMarketplaceSale(platform:Platform,subject:string,body:strin
    /show\s+@([^\s]+)\s+some\s+5-star/i
  ]);
  const order=first(text,[
+   /order id\s*([A-Z0-9-]+)/i,
    /order:\s*([0-9-]+)/i,
    /(?:order|transaction)(?: id| number| #)?:\s*([A-Z0-9-]+)/i
  ]);
@@ -103,11 +109,10 @@ export function parseMarketplaceSale(platform:Platform,subject:string,body:strin
    /\bSKU\s*:\s*([^\n]+?)(?=\s+\$[\d,.]+|\s+Your Earnings|\s+Order|\n|$)/i,
    /\bSeller SKU\s*:\s*([^\n]+)/i
  ]);
- const fees=money(first(text,[
-   /payment processing fee[^$−-]*[−-]?\$?([\d,.]+)/i,
-   /boosting fee[^$−-]*[−-]?\$?([\d,.]+)/i,
-   /(?:fee|fees|selling fee|platform fee):\s*\$?([\d,.]+)/i
- ]));
+ const processingFee=money(first(text,[/payment processing fee[^$−-]*[−-]?\$?([\d,.]+)/i]));
+ const boostingFee=money(first(text,[/boosting fee[^$−-]*[−-]?\$?([\d,.]+)/i]));
+ const genericFee=money(first(text,[/(?:fee|fees|selling fee|platform fee):\s*\$?([\d,.]+)/i]));
+ const fees=(processingFee||boostingFee)?processingFee+boostingFee:genericFee;
  const shipping=money(first(text,[
    /shipping:\s*\$?([\d,.]+)/i,
    /(?:shipping cost|shipping fee):\s*\$?([\d,.]+)/i
