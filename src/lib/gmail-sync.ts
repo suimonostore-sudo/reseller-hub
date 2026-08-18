@@ -17,10 +17,10 @@ export async function syncGmail(){
  const run=await prisma.syncRun.create({data:{source:"gmail",status:"RUNNING"}});
  let found=0,parsed=0,reprocessed=0;
  try{
-  const pending=await prisma.emailMessage.findMany({where:{parsed:false,marketplace:{not:null}},orderBy:{receivedAt:"desc"},take:250});
+  const pending=await prisma.emailMessage.findMany({where:{parsed:false,marketplace:{not:null}},orderBy:{receivedAt:"desc"},take:500});
   for(const email of pending){if(await processStoredEmail(email)){parsed++;reprocessed++;}}
 
-  const list=await gmailJson("messages?q="+encodeURIComponent("newer_than:30d (from:poshmark OR from:mercari OR from:depop OR from:ebay)")+"&maxResults=100");
+  const list=await gmailJson("messages?q="+encodeURIComponent("newer_than:30d (from:poshmark OR from:mercari OR from:depop OR from:ebay)")+"&maxResults=500");
   for(const m of list.messages||[]){
    const existing=await prisma.emailMessage.findUnique({where:{messageId:m.id}});
    if(existing){
