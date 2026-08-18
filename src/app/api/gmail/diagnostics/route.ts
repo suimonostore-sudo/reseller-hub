@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/src/lib/prisma";
-import { normalizeEmailText } from "@/src/lib/email-parser";
+import { normalizeEmailText, parseMarketplaceSale } from "@/src/lib/email-parser";
+import { Platform } from "@prisma/client";
 
 function sanitize(text: string | null) {
   if (!text) return "";
@@ -14,7 +15,7 @@ function sanitize(text: string | null) {
 
 function focus(text: string | null) {
   const clean = sanitize(normalizeEmailText(text ?? ""));
-  const needles = ["$", "total", "paid", "price", "earn", "sold", "sale", "order", "ship", "mercari"];
+  const needles = ["$", "total", "paid", "price", "earn", "sold", "sale", "order", "ship", "mercari", "sku"];
   const parts: string[] = [];
   for (const needle of needles) {
     const lower = clean.toLowerCase();
@@ -31,6 +32,15 @@ function focus(text: string | null) {
   return [...new Set(parts)].slice(0, 8);
 }
 
+function preview(r: any) {
+  if (!r.marketplace) return null;
+  try {
+    return parseMarketplaceSale(r.marketplace as Platform, r.subject ?? "", r.bodyText ?? "");
+  } catch {
+    return null;
+  }
+}
+
 function view(r: any) {
   return {
     sender: r.sender,
@@ -38,6 +48,7 @@ function view(r: any) {
     marketplace: r.marketplace,
     parsed: r.parsed,
     receivedAt: r.receivedAt,
+    parserPreview: preview(r),
     focus: focus(r.bodyText),
   };
 }
