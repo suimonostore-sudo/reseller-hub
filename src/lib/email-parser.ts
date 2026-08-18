@@ -41,7 +41,7 @@ function looksLikeSale(platform:Platform,subject:string,body:string){
  if(platform===Platform.EBAY) return s.startsWith("you made the sale for ") || /sold:\s*\$|buyer paid/.test(b);
  if(platform===Platform.DEPOP) return /sale confirmation|it'?s time to ship/.test(s) || /you'?ve made a sale|order details|item price/.test(b);
  if(platform===Platform.POSHMARK) return /congratulations.*sale|you made a sale|sold/.test(s) || /order total|your earnings|buyer/.test(b);
- if(platform===Platform.MERCARI) return /you made a sale|item sold|sold/.test(s) || /order total|your earnings|buyer/.test(b);
+ if(platform===Platform.MERCARI) return /you made a sale|item sold|sold|ship your item|time to ship|congratulations/i.test(s) || /you made a sale|item sold|order total|your earnings|buyer paid|ship your item|sale price/i.test(b);
  return false;
 }
 
@@ -64,6 +64,14 @@ export function parseMarketplaceSale(platform:Platform,subject:string,body:strin
      /sold item\s*:?\s*([^\n]+)/i
    ]));
  }
+ if(platform===Platform.MERCARI){
+   title=cleanTitle(first(text,[
+     /(?:item|item name|listing|listing title)(?: title)?:\s*([^\n]+)/i,
+     /you sold\s+["“]?([^\n"”]+)["”]?/i,
+     /sold\s+["“]([^"”]+)["”]/i,
+     /sale details[\s\S]{0,120}?([^\n]+?)\s+\$[\d,.]+/i
+   ]));
+ }
  if(!title){
    title=cleanTitle(first(text,[/item(?: title)?:\s*([^\n]+)/i,/you sold[:\s]+([^\n]+)/i,/sold[:\s]+([^\n]+)/i,/listing:\s*([^\n]+)/i]));
  }
@@ -71,9 +79,10 @@ export function parseMarketplaceSale(platform:Platform,subject:string,body:strin
  const amount=money(first(text,[
    /sold:\s*\$?([\d,.]+)/i,
    /item price\s*\$?([\d,.]+)/i,
+   /sale price\s*:?\s*\$?([\d,.]+)/i,
    /order details[\s\S]{0,180}?\$([\d,.]+)/i,
-   /(?:order total|sale total|sold for|buyer paid|sale price|order amount|total):?\s*\$?([\d,.]+)/i,
-   /(?:you earned|your earnings):?\s*\$?([\d,.]+)/i,
+   /(?:order total|sale total|sold for|buyer paid|order amount|total):?\s*\$?([\d,.]+)/i,
+   /(?:you earned|your earnings|you'll earn|you’ll earn):?\s*\$?([\d,.]+)/i,
    /(?:price):?\s*\$?([\d,.]+)/i,
    /\$([\d,.]+)\s+(?:sale|sold)/i
  ]));
@@ -90,6 +99,10 @@ export function parseMarketplaceSale(platform:Platform,subject:string,body:strin
    /(?:order|transaction)(?: id| number| #)?:\s*([A-Z0-9-]+)/i
  ]);
  const listing=first(text,[/(?:listing|item)(?: id| number| #):\s*([A-Z0-9-]+)/i,/\((\d{9,})\)\s*$/]);
+ const sku=first(text,[
+   /\bSKU\s*:\s*([^\n]+?)(?=\s+\$[\d,.]+|\s+Your Earnings|\s+Order|\n|$)/i,
+   /\bSeller SKU\s*:\s*([^\n]+)/i
+ ]);
  const fees=money(first(text,[
    /payment processing fee[^$−-]*[−-]?\$?([\d,.]+)/i,
    /boosting fee[^$−-]*[−-]?\$?([\d,.]+)/i,
@@ -101,5 +114,5 @@ export function parseMarketplaceSale(platform:Platform,subject:string,body:strin
  ]));
 
  if(!title || amount<=0) return null;
- return {platform,title,saleAmount:amount,buyerUsername:buyer||null,externalOrderId:order||null,externalListingId:listing||null,fees,shippingCost:shipping,quantity:1};
+ return {platform,title,saleAmount:amount,buyerUsername:buyer||null,externalOrderId:order||null,externalListingId:listing||null,sku:sku||null,fees,shippingCost:shipping,quantity:1};
 }
