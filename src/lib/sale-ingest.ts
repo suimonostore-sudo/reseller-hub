@@ -42,6 +42,29 @@ export async function findBestMatch(platform:Platform, externalListingId:string|
   const exactItem=items.find(i=>norm(i.title)===n);
   if(exactItem) return {item:exactItem,method:"EXACT_INVENTORY_TITLE",confidence:.95};
 
+  let bestItem:any=null,bestItemScore=0;
+  for(const i of items){
+    const score=tokenScore(title,i.title);
+    if(score>bestItemScore){bestItem=i;bestItemScore=score}
+  }
+  if(bestItem && bestItemScore>=0.9) return {item:bestItem,method:"INVENTORY_TITLE_SIMILARITY",confidence:bestItemScore};
+
+  return null;
+}
+
+async function findReminderDuplicate(input:any, platform:Platform, amount:number){
+  if(input.externalOrderId || !input.buyerUsername || !input.title || amount<=0) return null;
+  const soldAt=input.soldAt?new Date(input.soldAt):new Date();
+  const from=new Date(soldAt.getTime()-3*24*60*60*1000);
+  const to=new Date(soldAt.getTime()+3*24*60*60*1000);
+  const candidates=await prisma.sale.findMany({
+    where:{platform,buyerUsername:input.buyerUsername,saleAmount:amount,soldAt:{gte:from,lte:to}},
+    include:{lines:{include:{inventoryItem:true}}}
+  });
+  for(const sale of candidates){
+    const line=sale.lines[0];
+    if(line && tokenScore(input.title,line.title)>=0.96) return sale;
+  }
   return null;
 }
 
@@ -57,6 +80,9 @@ export async function ingestSale(input:any){
 
   const existing=await prisma.sale.findUnique({where:{ingestionKey},include:{lines:{include:{inventoryItem:true}}}});
   if(existing) return {sale:existing,deduped:true};
+
+  const reminderDuplicate=await findReminderDuplicate(input,platform,amount);
+  if(reminderDuplicate) return {sale:reminderDuplicate,deduped:true,reminderDuplicate:true};
 
   const match=await findBestMatch(platform,input.externalListingId,input.title,input.sku);
   const item=match?.item??null;
