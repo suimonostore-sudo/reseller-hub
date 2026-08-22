@@ -36,21 +36,29 @@ model BulkBuy {
 }
 
 model InventoryItem {
-  id            Int        @id @default(autoincrement())
-  sku           String     @unique
-  sourceSku     String?
-  title         String
-  quantity      Int        @default(1)
-  unlisted      Boolean    @default(false)
-  cogs          Float?
-  condition     String?
-  location      String?
-  bulkBuyId     Int?
-  bulkBuy       BulkBuy?   @relation(fields: [bulkBuyId], references: [id])
-  listings      Listing[]
-  saleLines     SaleLine[]
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
+  id                Int        @id @default(autoincrement())
+  sku               String     @unique
+  sourceSku         String?
+  title             String
+  quantity          Int        @default(1)
+  unlisted          Boolean    @default(false)
+  workflowStatus    String     @default("LISTED")
+  dispositionStatus String     @default("ACTIVE")
+  disposedAt        DateTime?
+  dispositionNote   String?
+  cogs              Float?
+  condition         String?
+  location          String?
+  purchaseStore     String?
+  purchaseDate      DateTime?
+  listDate          DateTime?
+  listPrice         Float?
+  bulkBuyId         Int?
+  bulkBuy           BulkBuy?   @relation(fields: [bulkBuyId], references: [id])
+  listings          Listing[]
+  saleLines         SaleLine[]
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
 }
 
 model Listing {
