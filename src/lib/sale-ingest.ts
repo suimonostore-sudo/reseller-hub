@@ -12,8 +12,20 @@ function tokenScore(a:string,b:string){
 export async function findBestMatch(platform:Platform, externalListingId:string|undefined, title:string, sku?:string){
   if(sku){
     const cleanedSku=sku.trim();
-    const exactSku=await prisma.inventoryItem.findFirst({where:{OR:[{sku:cleanedSku},{sourceSku:cleanedSku}]}});
-    if(exactSku) return {item:exactSku,method:exactSku.sku===cleanedSku?"SKU":"SOURCE_SKU",confidence:1};
+    const internal=await prisma.inventoryItem.findUnique({where:{sku:cleanedSku}});
+    if(internal) return {item:internal,method:"SKU",confidence:1};
+
+    const sourceMatches=await prisma.inventoryItem.findMany({where:{sourceSku:cleanedSku}});
+    if(sourceMatches.length===1){
+      const score=tokenScore(title,sourceMatches[0].title);
+      if(score>=0.9) return {item:sourceMatches[0],method:"SOURCE_SKU_TITLE",confidence:score};
+    } else if(sourceMatches.length>1){
+      const exact=sourceMatches.find(i=>norm(i.title)===norm(title));
+      if(exact) return {item:exact,method:"SOURCE_SKU_EXACT_TITLE",confidence:1};
+      let best:any=null,bestScore=0,second=0;
+      for(const i of sourceMatches){const score=tokenScore(title,i.title);if(score>bestScore){second=bestScore;best=i;bestScore=score}else if(score>second)second=score;}
+      if(best && bestScore>=0.94 && bestScore-second>=0.08) return {item:best,method:"SOURCE_SKU_TITLE",confidence:bestScore};
+    }
   }
 
   if(externalListingId){
