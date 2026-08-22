@@ -8,14 +8,15 @@ function tokenScore(a:string,b:string){
   let hit=0; for(const x of A) if(B.has(x)) hit++;
   return hit/Math.max(A.size,B.size);
 }
+const activeInventory={dispositionStatus:"ACTIVE",quantity:{gt:0}} as const;
 
 export async function findBestMatch(platform:Platform, externalListingId:string|undefined, title:string, sku?:string){
   if(sku){
     const cleanedSku=sku.trim();
-    const internal=await prisma.inventoryItem.findUnique({where:{sku:cleanedSku}});
+    const internal=await prisma.inventoryItem.findFirst({where:{sku:cleanedSku,...activeInventory}});
     if(internal) return {item:internal,method:"SKU",confidence:1};
 
-    const sourceMatches=await prisma.inventoryItem.findMany({where:{sourceSku:cleanedSku}});
+    const sourceMatches=await prisma.inventoryItem.findMany({where:{sourceSku:cleanedSku,...activeInventory}});
     if(sourceMatches.length===1){
       const score=tokenScore(title,sourceMatches[0].title);
       if(score>=0.9) return {item:sourceMatches[0],method:"SOURCE_SKU_TITLE",confidence:score};
@@ -33,11 +34,11 @@ export async function findBestMatch(platform:Platform, externalListingId:string|
       where:{platform_externalId:{platform,externalId:externalListingId}},
       include:{inventoryItem:true}
     });
-    if(exact?.inventoryItem) return {item:exact.inventoryItem, method:"LISTING_ID", confidence:1};
+    if(exact?.inventoryItem && exact.inventoryItem.dispositionStatus==="ACTIVE" && exact.inventoryItem.quantity>0) return {item:exact.inventoryItem, method:"LISTING_ID", confidence:1};
   }
 
   const listings=await prisma.listing.findMany({
-    where:{platform,active:true,inventoryItemId:{not:null}},
+    where:{platform,active:true,inventoryItemId:{not:null},inventoryItem:{is:{...activeInventory}}},
     include:{inventoryItem:true}
   });
   const n=norm(title);
@@ -51,7 +52,7 @@ export async function findBestMatch(platform:Platform, externalListingId:string|
   }
   if(best && bestScore>=0.82) return {item:best,method:"TITLE_SIMILARITY",confidence:bestScore};
 
-  const items=await prisma.inventoryItem.findMany();
+  const items=await prisma.inventoryItem.findMany({where:{...activeInventory}});
   const exactItem=items.find(i=>norm(i.title)===n);
   if(exactItem) return {item:exactItem,method:"EXACT_INVENTORY_TITLE",confidence:.95};
 
