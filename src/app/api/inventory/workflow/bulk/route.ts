@@ -5,9 +5,12 @@ const allowed = new Set(["NEEDS_PHOTOS", "PHOTOS_DONE", "LISTED"]);
 
 export async function PATCH(req: Request) {
   const body = await req.json().catch(() => ({}));
-  const ids = Array.isArray(body.ids)
-    ? [...new Set(body.ids.map((x: unknown) => Number(x)).filter((x: number) => Number.isInteger(x) && x > 0))]
-    : [];
+  const rawIds: unknown[] = Array.isArray(body.ids) ? body.ids : [];
+  const ids: number[] = Array.from(new Set<number>(
+    rawIds
+      .map((x: unknown) => Number(x))
+      .filter((x: number) => Number.isInteger(x) && x > 0)
+  ));
   const status = String(body.workflowStatus || "").toUpperCase();
 
   if (!ids.length) return NextResponse.json({ error: "Select at least one inventory item." }, { status: 400 });
@@ -17,7 +20,7 @@ export async function PATCH(req: Request) {
     where: { id: { in: ids }, dispositionStatus: "ACTIVE" },
     select: { id: true, listDate: true },
   });
-  const activeIds = existing.map(x => x.id);
+  const activeIds: number[] = existing.map(x => x.id);
   if (!activeIds.length) return NextResponse.json({ error: "No active inventory items were selected." }, { status: 400 });
 
   const now = new Date();
@@ -31,7 +34,7 @@ export async function PATCH(req: Request) {
     });
 
     if (status === "LISTED") {
-      const missingListDate = existing.filter(x => !x.listDate).map(x => x.id);
+      const missingListDate: number[] = existing.filter(x => !x.listDate).map(x => x.id);
       if (missingListDate.length) {
         await tx.inventoryItem.updateMany({
           where: { id: { in: missingListDate } },
