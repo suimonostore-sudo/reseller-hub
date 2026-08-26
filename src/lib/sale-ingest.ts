@@ -1,12 +1,38 @@
 import { prisma } from "@/src/lib/prisma";
 import { Platform, SaleStatus } from "@prisma/client";
 
-function norm(s:string){return s.toLowerCase().replace(/[^a-z0-9]+/g," ").trim().replace(/\s+/g," ")}
+function norm(s:string){return s.toLowerCase().replace(/[^a-z0-9.]+/g," ").trim().replace(/\s+/g," ")}
 function tokenScore(a:string,b:string){
   const A=new Set(norm(a).split(" ").filter(Boolean)), B=new Set(norm(b).split(" ").filter(Boolean));
   if(!A.size||!B.size)return 0;
   let hit=0; for(const x of A) if(B.has(x)) hit++;
   return hit/Math.max(A.size,B.size);
+}
+function sizeTokens(s:string){
+  const n=` ${norm(s)} `;
+  const out=new Set<string>();
+  const patterns=[
+    /\b(?:size|sz)\s*([0-9]{1,2}(?:\.5)?|[xsml]{1,3}|xxl|xxxl)\b/g,
+    /\b(?:mens?|womens?|men|women)\s*([0-9]{1,2}(?:\.5)?)\b/g,
+    /\b(?:us)\s*([0-9]{1,2}(?:\.5)?)\b/g,
+  ];
+  for(const re of patterns){let m:RegExpExecArray|null;while((m=re.exec(n)))out.add(m[1].toLowerCase())}
+  return out;
+}
+function hasSizeConflict(a:string,b:string){
+  const A=sizeTokens(a),B=sizeTokens(b);
+  if(!A.size||!B.size)return false;
+  for(const x of A) if(B.has(x)) return false;
+  return true;
+}
+function chooseUnique<T extends {title:string}>(title:string, candidates:T[], minimum:number, gap:number){
+  let best:T|null=null,bestScore=0,second=0;
+  for(const item of candidates){
+    if(hasSizeConflict(title,item.title))continue;
+    const score=tokenScore(title,item.title);
+    if(score>bestScore){second=bestScore;best=item;bestScore=score}else if(score>second)second=score;
+  }
+  return best&&bestScore>=minimum&&bestScore-second>=gap?{item:best,score:bestScore}:null;
 }
 const activeInventory={dispositionStatus:"ACTIVE",quantity:{gt:0}} as const;
 
@@ -14,18 +40,17 @@ export async function findBestMatch(platform:Platform, externalListingId:string|
   if(sku){
     const cleanedSku=sku.trim();
     const internal=await prisma.inventoryItem.findFirst({where:{sku:cleanedSku,...activeInventory}});
-    if(internal) return {item:internal,method:"SKU",confidence:1};
+    if(internal && !hasSizeConflict(title,internal.title)) return {item:internal,method:"SKU",confidence:1};
 
     const sourceMatches=await prisma.inventoryItem.findMany({where:{sourceSku:cleanedSku,...activeInventory}});
     if(sourceMatches.length===1){
       const score=tokenScore(title,sourceMatches[0].title);
-      if(score>=0.9) return {item:sourceMatches[0],method:"SOURCE_SKU_TITLE",confidence:score};
+      if(!hasSizeConflict(title,sourceMatches[0].title)&&score>=0.9) return {item:sourceMatches[0],method:"SOURCE_SKU_TITLE",confidence:score};
     } else if(sourceMatches.length>1){
       const exact=sourceMatches.find(i=>norm(i.title)===norm(title));
       if(exact) return {item:exact,method:"SOURCE_SKU_EXACT_TITLE",confidence:1};
-      let best:any=null,bestScore=0,second=0;
-      for(const i of sourceMatches){const score=tokenScore(title,i.title);if(score>bestScore){second=bestScore;best=i;bestScore=score}else if(score>second)second=score;}
-      if(best && bestScore>=0.94 && bestScore-second>=0.08) return {item:best,method:"SOURCE_SKU_TITLE",confidence:bestScore};
+      const picked=chooseUnique(title,sourceMatches,0.94,0.08);
+      if(picked) return {item:picked.item,method:"SOURCE_SKU_TITLE",confidence:picked.score};
     }
   }
 
@@ -34,7 +59,7 @@ export async function findBestMatch(platform:Platform, externalListingId:string|
       where:{platform_externalId:{platform,externalId:externalListingId}},
       include:{inventoryItem:true}
     });
-    if(exact?.inventoryItem && exact.inventoryItem.dispositionStatus==="ACTIVE" && exact.inventoryItem.quantity>0) return {item:exact.inventoryItem, method:"LISTING_ID", confidence:1};
+    if(exact?.inventoryItem && exact.inventoryItem.dispositionStatus==="ACTIVE" && exact.inventoryItem.quantity>0 && !hasSizeConflict(title,exact.inventoryItem.title)) return {item:exact.inventoryItem, method:"LISTING_ID", confidence:1};
   }
 
   const listings=await prisma.listing.findMany({
@@ -42,26 +67,19 @@ export async function findBestMatch(platform:Platform, externalListingId:string|
     include:{inventoryItem:true}
   });
   const n=norm(title);
-  const exactTitle=listings.find(l=>norm(l.title)===n);
+  const exactTitle=listings.find(l=>norm(l.title)===n && l.inventoryItem && !hasSizeConflict(title,l.inventoryItem.title));
   if(exactTitle?.inventoryItem) return {item:exactTitle.inventoryItem,method:"EXACT_LISTING_TITLE",confidence:.98};
 
-  let best:any=null,bestScore=0;
-  for(const l of listings){
-    const score=tokenScore(title,l.title);
-    if(score>bestScore && l.inventoryItem){best=l.inventoryItem;bestScore=score}
-  }
-  if(best && bestScore>=0.82) return {item:best,method:"TITLE_SIMILARITY",confidence:bestScore};
+  const listingCandidates=listings.filter(l=>l.inventoryItem).map(l=>({title:l.title,item:l.inventoryItem!}));
+  const pickedListing=chooseUnique(title,listingCandidates,0.86,0.07);
+  if(pickedListing) return {item:pickedListing.item.item,method:"TITLE_SIMILARITY",confidence:pickedListing.score};
 
   const items=await prisma.inventoryItem.findMany({where:{...activeInventory}});
-  const exactItem=items.find(i=>norm(i.title)===n);
+  const exactItem=items.find(i=>norm(i.title)===n && !hasSizeConflict(title,i.title));
   if(exactItem) return {item:exactItem,method:"EXACT_INVENTORY_TITLE",confidence:.95};
 
-  let bestItem:any=null,bestItemScore=0;
-  for(const i of items){
-    const score=tokenScore(title,i.title);
-    if(score>bestItemScore){bestItem=i;bestItemScore=score}
-  }
-  if(bestItem && bestItemScore>=0.9) return {item:bestItem,method:"INVENTORY_TITLE_SIMILARITY",confidence:bestItemScore};
+  const pickedItem=chooseUnique(title,items,0.92,0.08);
+  if(pickedItem) return {item:pickedItem.item,method:"INVENTORY_TITLE_SIMILARITY",confidence:pickedItem.score};
 
   return null;
 }
