@@ -102,6 +102,7 @@ model SaleLine {
   title         String
   quantity      Int       @default(1)
   unitPrice     Float
+  cogsAtSale    Float?
   sale          Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
   inventoryItem InventoryItem? @relation(fields: [inventoryItemId], references: [id])
 }
