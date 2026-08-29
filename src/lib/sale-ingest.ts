@@ -143,7 +143,8 @@ export async function ingestSale(input:any){
           inventoryItemId:item?.id??null,
           title:input.title,
           quantity:qty,
-          unitPrice:qty?amount/qty:amount
+          unitPrice:qty?amount/qty:amount,
+          cogsAtSale:item?.cogs??null
         }}
       },
       include:{lines:{include:{inventoryItem:true}}}
