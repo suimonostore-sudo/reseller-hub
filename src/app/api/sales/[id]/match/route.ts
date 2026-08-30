@@ -15,8 +15,8 @@ export async function POST(req:Request,{params}:{params:Promise<{id:string}>}){
   await prisma.$transaction(async tx=>{
     if(line?.inventoryItemId) await tx.inventoryItem.update({where:{id:line.inventoryItemId},data:{quantity:{increment:qty}}});
     await tx.inventoryItem.update({where:{id:inventoryItemId},data:{quantity:{decrement:qty}}});
-    if(line) await tx.saleLine.update({where:{id:line.id},data:{inventoryItemId}});
-    await tx.sale.update({where:{id:saleId},data:{status:SaleStatus.MATCHED}});
+    if(line) await tx.saleLine.update({where:{id:line.id},data:{inventoryItemId,cogsAtSale:item.cogs}});
+    await tx.sale.update({where:{id:saleId},data:{status:SaleStatus.MATCHED,matchMethod:"MANUAL_SKU",matchConfidence:1}});
   });
   return NextResponse.json({ok:true});
 }
