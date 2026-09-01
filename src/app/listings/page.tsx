@@ -8,7 +8,7 @@ export default function ListingsPage(){
  const[items,setItems]=useState<Item[]>([]),[listings,setListings]=useState<Listing[]>([]),[search,setSearch]=useState("");
  async function load(){const[i,l]=await Promise.all([fetch("/api/inventory").then(r=>r.json()),fetch("/api/listings").then(r=>r.json())]);setItems(i);setListings(l)}
  useEffect(()=>{load()},[]);
- const listed=useMemo(()=>items.filter(i=>(i.dispositionStatus||"ACTIVE")==="ACTIVE"&&i.workflowStatus==="LISTED").filter(i=>{const q=search.toLowerCase().trim();if(!q)return true;const maps=listings.filter(l=>l.inventoryItemId===i.id);return [i.sku,i.title,i.location,...maps.map(m=>`${m.platform} ${m.externalId}`)].filter(Boolean).join(" ").toLowerCase().includes(q)}),[items,listings,search]);
+ const listed=useMemo(()=>items.filter(i=>(i.dispositionStatus||"ACTIVE")==="ACTIVE"&&i.quantity>0&&i.workflowStatus==="LISTED").filter(i=>{const q=search.toLowerCase().trim();if(!q)return true;const maps=listings.filter(l=>l.inventoryItemId===i.id);return [i.sku,i.title,i.location,...maps.map(m=>`${m.platform} ${m.externalId}`)].filter(Boolean).join(" ").toLowerCase().includes(q)}),[items,listings,search]);
  return <main className="shell">
   <nav className="globalNav"><a href="/">Dashboard</a><a href="/inventory">Inventory</a><a href="/listings">Listed</a><a href="/sales">Sold</a></nav>
   <header className="header"><div><a className="back" href="/">← Dashboard</a><h1>Listed Inventory</h1><p>Items that are ready for sale. Marketplace mapping is shown only when it already exists.</p></div><a className="button" href="/inventory?status=PHOTOS_DONE">Move Items to Listed</a></header>
