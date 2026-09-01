@@ -106,6 +106,7 @@ export async function ingestSale(input:any){
   const amount=Number(input.saleAmount??0);
   const fees=Number(input.fees??0);
   const shipping=Number(input.shippingCost??0);
+  const soldAt=input.soldAt?new Date(input.soldAt):new Date();
   const ingestionKey=input.ingestionKey || [
     platform,input.externalOrderId||"",input.sourceEmailId||"",input.title||"",input.buyerUsername||""
   ].join("|");
@@ -135,7 +136,7 @@ export async function ingestSale(input:any){
         fees,
         shippingCost:shipping,
         sourceEmailId:input.sourceEmailId||null,
-        soldAt:input.soldAt?new Date(input.soldAt):new Date(),
+        soldAt,
         status:item?SaleStatus.MATCHED:SaleStatus.NEW,
         matchMethod:match?.method||null,
         matchConfidence:match?.confidence??null,
@@ -143,13 +144,16 @@ export async function ingestSale(input:any){
           inventoryItemId:item?.id??null,
           title:input.title,
           quantity:qty,
-          unitPrice:qty?amount/qty:amount,
-          cogsAtSale:item?.cogs??null
+          unitPrice:qty?amount/qty:amount
         }}
       },
       include:{lines:{include:{inventoryItem:true}}}
     });
-    if(item) await tx.inventoryItem.update({where:{id:item.id},data:{quantity:{decrement:qty}}});
+    if(item){
+      const remaining=item.quantity-qty;
+      await tx.inventoryItem.update({where:{id:item.id},data:{quantity:remaining,...(remaining===0?{dispositionStatus:"SOLD",disposedAt:soldAt,dispositionNote:`${platform} · $${amount.toFixed(2)}`}:{})}});
+      if(remaining===0) await tx.listing.updateMany({where:{inventoryItemId:item.id,active:true},data:{active:false}});
+    }
     return created;
   });
 
