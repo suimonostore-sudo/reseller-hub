@@ -39,9 +39,9 @@ export function marketplaceFrom(sender:string,subject:string):Platform|null{
 function looksLikeSale(platform:Platform,subject:string,body:string){
  const s=subject.toLowerCase(), b=body.toLowerCase();
  if(platform===Platform.EBAY) return s.startsWith("you made the sale for ") || /sold:\s*\$|buyer paid/.test(b);
- if(platform===Platform.DEPOP) return /sale confirmation|it'?s time to ship/.test(s) || /you'?ve made a sale|order details|item price/.test(b);
- if(platform===Platform.POSHMARK) return /just sold to|congratulations.*sale|you made a sale|sold/.test(s) || /order total|your earnings|buyer/.test(b);
- if(platform===Platform.MERCARI) return /you made a sale|item sold|sold|ship your item|time to ship|congratulations/i.test(s) || /you made a sale|item sold|order total|your earnings|buyer paid|ship your item|sale price/i.test(b);
+ if(platform===Platform.DEPOP) return /sale confirmation/.test(s) || (/you'?ve made a sale|you sold/.test(b) && !/time to ship|shipping reminder|delivered/.test(s));
+ if(platform===Platform.POSHMARK) return /just sold to|you made a sale|congratulations.*sale/.test(s) || /you just sold/.test(b);
+ if(platform===Platform.MERCARI) return /you made a sale|item sold|congratulations.*sale/.test(s) || /you made a sale|item sold/.test(b);
  return false;
 }
 
