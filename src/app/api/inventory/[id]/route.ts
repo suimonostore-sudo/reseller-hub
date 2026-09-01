@@ -3,7 +3,7 @@ import { prisma } from "@/src/lib/prisma";
 
 function dateOrNull(v:any){return v?new Date(v):null}
 function workflow(v:any,unlisted:any){const s=String(v||"").toUpperCase();if(["NEEDS_PHOTOS","PHOTOS_DONE","LISTED"].includes(s))return s;return unlisted?"NEEDS_PHOTOS":"LISTED"}
-function disposition(v:any){const s=String(v||"ACTIVE").toUpperCase();return ["ACTIVE","DONATED","TRASHED"].includes(s)?s:"ACTIVE"}
+function disposition(v:any){const s=String(v||"ACTIVE").toUpperCase();return ["ACTIVE","SOLD","DONATED","DISCARDED","TRASHED"].includes(s)?s:"ACTIVE"}
 
 export async function PATCH(req:Request,{params}:{params:Promise<{id:string}>}){
   const {id}=await params,b=await req.json(),itemId=Number(id);
