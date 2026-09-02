@@ -11,6 +11,16 @@ export async function PATCH(req:Request,{params}:{params:Promise<{id:string}>}){
   if(b.workflowStatus!==undefined){const w=workflow(b.workflowStatus,false);data.workflowStatus=w;data.unlisted=w!=="LISTED";if(w==="LISTED"&&b.setListDate!==false)data.listDate=b.listDate?dateOrNull(b.listDate):new Date();}
   if(b.location!==undefined)data.location=b.location||null;
   if(b.listPrice!==undefined)data.listPrice=b.listPrice==null||b.listPrice===""?null:Number(b.listPrice);
+  if(b.title!==undefined)data.title=String(b.title);
+  if(b.purchaseStore!==undefined)data.purchaseStore=b.purchaseStore||null;
+  if(b.cogs!==undefined)data.cogs=b.cogs==null||b.cogs===""?null:Number(b.cogs);
+  if(b.condition!==undefined)data.condition=b.condition||null;
+  if(b.purchaseDate!==undefined)data.purchaseDate=dateOrNull(b.purchaseDate);
+  if(b.quantity!==undefined)data.quantity=Math.max(0,Number(b.quantity)||0);
+  if(b.listDate!==undefined)data.listDate=dateOrNull(b.listDate);
+  if(b.sku!==undefined)data.sku=String(b.sku);
+  if(b.sourceSku!==undefined)data.sourceSku=b.sourceSku||null;
+  if(b.dispositionNote!==undefined)data.dispositionNote=b.dispositionNote||null;
   if(!Object.keys(data).length)return NextResponse.json({error:"No supported fields supplied"},{status:400});
   const item=await prisma.inventoryItem.update({where:{id:itemId},data});
   return NextResponse.json(item);
