@@ -35,13 +35,13 @@ export async function GET(req:NextRequest){
     const platform=platformOf(r.m);if(!platform){failed++;details.push({product:r.p,error:`Unsupported marketplace ${r.m}`});continue}
     const title=clean(r.p)||"Untitled Flipwise sale",amount=money(r.a),fees=money(r.f),shipping=money(r.sh),qty=Math.max(1,Number(r.q||1)||1),soldAt=new Date(clean(r.sd));
     if(Number.isNaN(soldAt.getTime())){failed++;details.push({product:r.p,error:"Invalid sold date"});continue}
-    const ingestionKey=keyFor(r,platform);
+    const ingestionKey=keyFor(r,platform),eb=clean(r.eb);
     let existing=await prisma.sale.findUnique({where:{ingestionKey},select:{id:true}});
-    if(!existing&&platform===Platform.EBAY&&clean(r.ord))existing=await prisma.sale.findFirst({where:{platform,externalOrderId:clean(r.ord)},select:{id:true}});
+    if(!existing&&platform===Platform.EBAY&&clean(r.ord))existing=await prisma.sale.findFirst({where:{platform,externalOrderId:clean(r.ord),...(eb?{externalListingId:eb}:{})},select:{id:true}});
     if(!existing){const from=new Date(soldAt.getTime()-36*60*60*1000),to=new Date(soldAt.getTime()+36*60*60*1000);const candidates=await prisma.sale.findMany({where:{platform,saleAmount:{gte:amount-.005,lte:amount+.005},soldAt:{gte:from,lte:to}},select:{id:true,lines:{select:{title:true}}}});existing=candidates.find(s=>s.lines.some(l=>norm(l.title)===norm(title)))||null}
     if(existing){deduped++;continue}
 
-    const hits=new Set<number>();const eb=clean(r.eb),cs=clean(r.cs),t=norm(title),pd=day(r.pd),cost=money(r.c);
+    const hits=new Set<number>();const cs=clean(r.cs),t=norm(title),pd=day(r.pd),cost=money(r.c);
     const collect=(a?:number[])=>{for(const id of a||[])hits.add(id)};
     if(eb)collect(byListing.get(`${platform}|${eb}`));
     if(hits.size===0&&cs){const ids=bySource.get(cs)||[];const exact=ids.filter(id=>norm(itemById.get(id)?.title)===t);if(exact.length)exact.forEach(id=>hits.add(id));else if(ids.length===1)hits.add(ids[0]);}
@@ -50,10 +50,9 @@ export async function GET(req:NextRequest){
     let itemId:number|null=null;if(hits.size===1)itemId=[...hits][0];else if(hits.size>1){ambiguous++;details.push({product:title,customSku:r.cs,ebayItemId:r.eb,matches:[...hits]});}
 
     const item=itemId?itemById.get(itemId):null;
-    const sale=await prisma.$transaction(async tx=>{
-     const created=await tx.sale.create({data:{platform,externalOrderId:clean(r.ord)||null,externalListingId:eb||null,ingestionKey,saleAmount:amount,fees,shippingCost:shipping,soldAt,status:item?SaleStatus.MATCHED:SaleStatus.NEW,matchMethod:item?"FLIPWISE_HISTORICAL":null,matchConfidence:item?1:null,lines:{create:{inventoryItemId:item?.id??null,title,quantity:qty,unitPrice:qty?amount/qty:amount,cogsAtSale:cost||item?.cogs||null}}}});
+    await prisma.$transaction(async tx=>{
+     await tx.sale.create({data:{platform,externalOrderId:clean(r.ord)||null,externalListingId:eb||null,ingestionKey,saleAmount:amount,fees,shippingCost:shipping,soldAt,status:item?SaleStatus.MATCHED:SaleStatus.NEW,matchMethod:item?"FLIPWISE_HISTORICAL":null,matchConfidence:item?1:null,lines:{create:{inventoryItemId:item?.id??null,title,quantity:qty,unitPrice:qty?amount/qty:amount,cogsAtSale:cost||item?.cogs||null}}}});
      if(item){const remaining=Math.max(0,item.quantity-qty);await tx.inventoryItem.update({where:{id:item.id},data:{quantity:remaining,dispositionStatus:remaining===0?"SOLD":item.dispositionStatus,...(remaining===0?{disposedAt:soldAt,dispositionNote:`${platform} · $${amount.toFixed(2)}`}:{})}});if(remaining===0)await tx.listing.updateMany({where:{inventoryItemId:item.id,active:true},data:{active:false}});item.quantity=remaining;if(remaining===0)item.dispositionStatus="SOLD";}
-     return created;
     });
     imported++;if(item)matched++;else unmatched++;
    }catch(e:any){failed++;details.push({product:r.p,error:e?.message||String(e)})}
