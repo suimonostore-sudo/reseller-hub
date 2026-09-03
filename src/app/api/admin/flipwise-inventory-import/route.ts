@@ -19,7 +19,7 @@ export async function GET(req:NextRequest){
 
   const existing=await prisma.inventoryItem.findMany({select:{id:true,sku:true,sourceSku:true,title:true,cogs:true,purchaseDate:true,purchaseStore:true,location:true,listings:{select:{externalId:true,platform:true}}}});
   const bySku=new Map<string,number[]>(),bySource=new Map<string,number[]>(),byEbay=new Map<string,number[]>(),byTdc=new Map<string,number[]>(),byTds=new Map<string,number[]>();
-  const add=(m:Map<string,number[]>,k:string,id:number)=>{if(!k)return;const a=m.get(k)||[];a.push(id);m.set(k,a)};
+  const add=(m:Map<string,number[]>,k:string,id:number)=>{if(!k)return;const a=m.get(k)||[];if(!a.includes(id))a.push(id);m.set(k,a)};
   for(const x of existing){
    add(bySku,clean(x.sku),x.id); add(bySource,clean(x.sourceSku),x.id);
    for(const l of x.listings||[])if(String(l.platform)==="EBAY")add(byEbay,clean(l.externalId),x.id);
@@ -31,14 +31,25 @@ export async function GET(req:NextRequest){
   let imported=0,duplicates=0,ambiguous=0,failed=0; const details:any[]=[];
   for(const r of rows){
    try{
-    const hits=new Set<number>();const cs=clean(r.cs),eb=clean(r.eb),t=norm(r.p),pd=day(r.pd),c=money(r.c),s=norm(r.st);
-    const collect=(a?:number[])=>{for(const id of a||[])hits.add(id)};
-    if(cs){collect(bySku.get(cs));collect(bySource.get(cs));}
-    if(eb)collect(byEbay.get(eb));
-    if(hits.size===0&&t&&pd&&c!=null)collect(byTdc.get(`${t}|${pd}|${Number(c).toFixed(2)}`));
-    if(hits.size===0&&t&&pd&&s)collect(byTds.get(`${t}|${pd}|${s}`));
-    if(hits.size===1){duplicates++;continue}
-    if(hits.size>1){ambiguous++;details.push({product:r.p,customSku:r.cs,ebayItemId:r.eb,matches:[...hits]});continue}
+    const cs=clean(r.cs),eb=clean(r.eb),t=norm(r.p),pd=day(r.pd),c=money(r.c),s=norm(r.st);
+    const ebayHits=eb?(byEbay.get(eb)||[]):[];
+    if(ebayHits.length===1){duplicates++;continue}
+    if(ebayHits.length>1){ambiguous++;details.push({product:r.p,customSku:r.cs,ebayItemId:r.eb,reason:"duplicate ebay id",matches:ebayHits});continue}
+
+    const composite=new Set<number>();
+    if(t&&pd&&c!=null)for(const id of byTdc.get(`${t}|${pd}|${Number(c).toFixed(2)}`)||[])composite.add(id);
+    if(t&&pd&&s)for(const id of byTds.get(`${t}|${pd}|${s}`)||[])composite.add(id);
+    if(composite.size===1){duplicates++;continue}
+    if(composite.size>1){ambiguous++;details.push({product:r.p,customSku:r.cs,ebayItemId:r.eb,reason:"composite match",matches:[...composite]});continue}
+
+    // Flipwise often reused one custom SKU across a whole purchase batch. A new eBay item ID is
+    // therefore stronger evidence of a distinct item than a repeated source SKU.
+    if(!eb){
+      const skuHits=new Set<number>();
+      if(cs){for(const id of bySku.get(cs)||[])skuHits.add(id);for(const id of bySource.get(cs)||[])skuHits.add(id)}
+      if(skuHits.size===1){duplicates++;continue}
+      if(skuHits.size>1){ambiguous++;details.push({product:r.p,customSku:r.cs,reason:"reused sku",matches:[...skuHits]});continue}
+    }
 
     let sku=makeSku(r),suffix=1;
     while(await prisma.inventoryItem.findUnique({where:{sku},select:{id:true}})){sku=`${makeSku(r)}-${suffix++}`}
