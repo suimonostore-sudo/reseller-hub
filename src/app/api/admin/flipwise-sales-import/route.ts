@@ -9,7 +9,7 @@ const clean=(v:any)=>String(v??"").trim();
 const norm=(v:any)=>clean(v).toLowerCase().replace(/[^a-z0-9.]+/g," ").trim().replace(/\s+/g," ");
 const money=(v:any)=>v==null||v===""?0:Number(v)||0;
 const day=(v:any)=>clean(v).slice(0,10);
-const platformOf=(v:any):Platform|null=>{const s=clean(v).toLowerCase();if(s==="ebay")return Platform.EBAY;if(s==="poshmark")return Platform.POSHMARK;if(s==="mercari")return Platform.MERCARI;if(s==="depop")return Platform.DEPOP;return null};
+const platformOf=(v:any):Platform|null=>{const s=clean(v).toLowerCase();if(s==="ebay")return Platform.EBAY;if(s==="poshmark"||s==="posh")return Platform.POSHMARK;if(s==="mercari")return Platform.MERCARI;if(s==="depop"||s==="dep")return Platform.DEPOP;return null};
 const keyFor=(r:Row,p:Platform)=>"FLIPWISE|"+createHash("sha1").update([p,r.ord,r.li,r.eb,r.p,r.sd,r.a,r.cs].map(clean).join("|")).digest("hex");
 
 export async function GET(req:NextRequest){
@@ -19,7 +19,7 @@ export async function GET(req:NextRequest){
   const rows:Row[]=JSON.parse(inflateRawSync(Buffer.from(d,"base64url")).toString("utf8"));
   if(!Array.isArray(rows)||rows.length>100)return NextResponse.json({error:"Invalid batch"},{status:400});
 
-  const inventory=await prisma.inventoryItem.findMany({select:{id:true,sku:true,sourceSku:true,title:true,cogs:true,quantity:true,dispositionStatus:true,purchaseDate:true,purchaseStore:true,listings:{select:{platform:true,externalId:true}}}});
+  const inventory=await prisma.inventoryItem.findMany({select:{id:true,sku:true,sourceSku:true,title:true,cogs:true,quantity:true,purchaseDate:true,listings:{select:{platform:true,externalId:true}}}});
   const byListing=new Map<string,number[]>(),bySource=new Map<string,number[]>(),byTitle=new Map<string,number[]>(),byTitleDateCost=new Map<string,number[]>();
   const add=(m:Map<string,number[]>,k:string,id:number)=>{if(!k)return;const a=m.get(k)||[];if(!a.includes(id))a.push(id);m.set(k,a)};
   for(const i of inventory){
@@ -50,10 +50,9 @@ export async function GET(req:NextRequest){
     let itemId:number|null=null;if(hits.size===1)itemId=[...hits][0];else if(hits.size>1){ambiguous++;details.push({product:title,customSku:r.cs,ebayItemId:r.eb,matches:[...hits]});}
 
     const item=itemId?itemById.get(itemId):null;
-    await prisma.$transaction(async tx=>{
-     await tx.sale.create({data:{platform,externalOrderId:clean(r.ord)||null,externalListingId:eb||null,ingestionKey,saleAmount:amount,fees,shippingCost:shipping,soldAt,status:item?SaleStatus.MATCHED:SaleStatus.NEW,matchMethod:item?"FLIPWISE_HISTORICAL":null,matchConfidence:item?1:null,lines:{create:{inventoryItemId:item?.id??null,title,quantity:qty,unitPrice:qty?amount/qty:amount,cogsAtSale:cost||item?.cogs||null}}}});
-     if(item){const remaining=Math.max(0,item.quantity-qty);await tx.inventoryItem.update({where:{id:item.id},data:{quantity:remaining,dispositionStatus:remaining===0?"SOLD":item.dispositionStatus,...(remaining===0?{disposedAt:soldAt,dispositionNote:`${platform} · $${amount.toFixed(2)}`}:{})}});if(remaining===0)await tx.listing.updateMany({where:{inventoryItemId:item.id,active:true},data:{active:false}});item.quantity=remaining;if(remaining===0)item.dispositionStatus="SOLD";}
-    });
+    // Historical Flipwise inventory was imported using Quantity Remaining, so historical sales
+    // must NOT decrement current on-hand quantity again.
+    await prisma.sale.create({data:{platform,externalOrderId:clean(r.ord)||null,externalListingId:eb||null,ingestionKey,saleAmount:amount,fees,shippingCost:shipping,soldAt,status:item?SaleStatus.MATCHED:SaleStatus.NEW,matchMethod:item?"FLIPWISE_HISTORICAL":null,matchConfidence:item?1:null,lines:{create:{inventoryItemId:item?.id??null,title,quantity:qty,unitPrice:qty?amount/qty:amount,cogsAtSale:cost||item?.cogs||null}}}});
     imported++;if(item)matched++;else unmatched++;
    }catch(e:any){failed++;details.push({product:r.p,error:e?.message||String(e)})}
   }
