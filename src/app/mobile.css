@@ -1,0 +1,149 @@
+@media (max-width: 700px) {
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    min-height: 100dvh;
+    padding-bottom: calc(74px + env(safe-area-inset-bottom));
+    overscroll-behavior-y: none;
+  }
+  .shell {
+    width: 100%;
+    max-width: none;
+    padding: max(16px, env(safe-area-inset-top)) 14px 20px;
+  }
+  .globalNav {
+    position: fixed;
+    z-index: 50;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    margin: 0;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+    background: rgba(255,255,255,.96);
+    border-top: 1px solid #e1e3e6;
+    box-shadow: 0 -8px 24px rgba(0,0,0,.06);
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0,1fr));
+    gap: 5px;
+    backdrop-filter: blur(14px);
+  }
+  .globalNav a {
+    min-height: 46px;
+    padding: 7px 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    line-height: 1.1;
+    font-size: 11px;
+    border-radius: 10px;
+    background: #f3f4f6;
+  }
+  .header {
+    margin-bottom: 18px;
+    gap: 14px;
+  }
+  .header h1 { font-size: 28px; }
+  .header p { font-size: 14px; line-height: 1.45; }
+  .header .actions,
+  .toolbar .actions,
+  .modalActions {
+    width: 100%;
+  }
+  .header .actions > *,
+  .toolbar .actions > * {
+    flex: 1 1 auto;
+  }
+  button,
+  .button,
+  .inventoryLink,
+  input,
+  select,
+  textarea {
+    min-height: 44px;
+  }
+  input,
+  select,
+  textarea { font-size: 16px; }
+  .cards {
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .card {
+    padding: 15px;
+    min-height: 92px;
+    text-align: left;
+  }
+  .card span { margin-bottom: 7px; }
+  .card strong { font-size: 25px; }
+  .panel {
+    padding: 14px;
+    border-radius: 14px;
+    margin-bottom: 16px;
+  }
+  .toolbar {
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .toolbar .actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .toolbar input,
+  .toolbar select { width: 100%; }
+  table {
+    -webkit-overflow-scrolling: touch;
+    border-radius: 10px;
+  }
+  th, td { padding: 11px 9px; }
+  .rowActions .linkBtn {
+    min-height: 40px;
+    padding: 8px;
+  }
+  .modalWrap {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .modal {
+    width: 100%;
+    max-height: 92dvh;
+    overflow: auto;
+    border-radius: 18px 18px 0 0;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+  }
+  .modalHead {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: #fff;
+    padding: 2px 0 10px;
+    margin-bottom: 10px;
+  }
+  .modalActions {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    background: #fff;
+    padding-top: 10px;
+  }
+  .modalActions > * { flex: 1; }
+  .flow {
+    gap: 7px;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 4px;
+  }
+  .flow a,
+  .flow div {
+    flex: 0 0 auto;
+  }
+  .health { gap: 8px; }
+  .health > div { padding: 14px; }
+}
+
+@media (max-width: 380px) {
+  .globalNav a { font-size: 10px; }
+  .cards { grid-template-columns: 1fr 1fr; }
+  .card { padding: 12px; }
+}
