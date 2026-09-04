@@ -20,6 +20,13 @@ export async function PATCH(req:Request,{params}:{params:Promise<{id:string}>}){
   if(b.listDate!==undefined)data.listDate=dateOrNull(b.listDate);
   if(b.sku!==undefined)data.sku=String(b.sku);
   if(b.sourceSku!==undefined)data.sourceSku=b.sourceSku||null;
+  if(b.dispositionStatus!==undefined){
+    const d=disposition(b.dispositionStatus);
+    data.dispositionStatus=d;
+    data.disposedAt=d==="ACTIVE"?null:(b.disposedAt!==undefined?dateOrNull(b.disposedAt):new Date());
+    if(d==="ACTIVE")data.dispositionNote=null;
+  }
+  if(b.disposedAt!==undefined&&b.dispositionStatus===undefined)data.disposedAt=dateOrNull(b.disposedAt);
   if(b.dispositionNote!==undefined)data.dispositionNote=b.dispositionNote||null;
   if(!Object.keys(data).length)return NextResponse.json({error:"No supported fields supplied"},{status:400});
   const item=await prisma.inventoryItem.update({where:{id:itemId},data});
