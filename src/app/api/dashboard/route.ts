@@ -1,19 +1,7 @@
 import {NextResponse} from "next/server";
 import {prisma} from "@/src/lib/prisma";
-
-export async function GET(){
-  const activeWhere={dispositionStatus:"ACTIVE",quantity:{gt:0}} as const;
-  const [active,needsPhotos,photosDone,listed,soldMarked,soldZeroQty,donated,discarded,legacyTrashed,needsMatch] = await Promise.all([
-    prisma.inventoryItem.count({where:activeWhere}),
-    prisma.inventoryItem.count({where:{...activeWhere,workflowStatus:"NEEDS_PHOTOS"}}),
-    prisma.inventoryItem.count({where:{...activeWhere,workflowStatus:"PHOTOS_DONE"}}),
-    prisma.inventoryItem.count({where:{...activeWhere,workflowStatus:"LISTED"}}),
-    prisma.inventoryItem.count({where:{dispositionStatus:"SOLD"}}),
-    prisma.inventoryItem.count({where:{dispositionStatus:"ACTIVE",quantity:{lte:0}}}),
-    prisma.inventoryItem.count({where:{dispositionStatus:"DONATED"}}),
-    prisma.inventoryItem.count({where:{dispositionStatus:"DISCARDED"}}),
-    prisma.inventoryItem.count({where:{dispositionStatus:"TRASHED"}}),
-    prisma.sale.count({where:{status:"NEW"}})
-  ]);
-  return NextResponse.json({active,needsPhotos,photosDone,listed,sold:soldMarked+soldZeroQty,donated,discarded:discarded+legacyTrashed,needsMatch});
-}
+function startOfDay(d=new Date()){const x=new Date(d);x.setHours(0,0,0,0);return x}
+function startOfWeek(d=new Date()){const x=startOfDay(d),day=x.getDay();x.setDate(x.getDate()-((day+6)%7));return x}
+function startOfMonth(d=new Date()){return new Date(d.getFullYear(),d.getMonth(),1)}
+function metrics(sales:any[]){let revenue=0,cogs=0,fees=0,shipping=0,profit=0,pendingShipping=0,finalized=0;for(const s of sales){revenue+=Number(s.saleAmount||0);const c=s.lines.reduce((n:number,l:any)=>n+Number(l.cogsAtSale??l.inventoryItem?.cogs??0)*Number(l.quantity||1),0);cogs+=c;fees+=Number(s.fees||0);if(s.platform==="EBAY"&&s.shippingCost==null){pendingShipping++;continue}shipping+=Number(s.shippingCost||0);profit+=Number(s.saleAmount||0)-Number(s.fees||0)-Number(s.shippingCost||0)-c;finalized++}return {sales:sales.length,revenue,cogs,fees,shipping,profit,pendingShipping,finalized}}
+export async function GET(){const activeWhere={dispositionStatus:"ACTIVE",quantity:{gt:0}} as const;const [active,needsPhotos,photosDone,listed,soldMarked,soldZeroQty,donated,discarded,legacyTrashed,needsMatch,sales]=await Promise.all([prisma.inventoryItem.count({where:activeWhere}),prisma.inventoryItem.count({where:{...activeWhere,workflowStatus:"NEEDS_PHOTOS"}}),prisma.inventoryItem.count({where:{...activeWhere,workflowStatus:"PHOTOS_DONE"}}),prisma.inventoryItem.count({where:{...activeWhere,workflowStatus:"LISTED"}}),prisma.inventoryItem.count({where:{dispositionStatus:"SOLD"}}),prisma.inventoryItem.count({where:{dispositionStatus:"ACTIVE",quantity:{lte:0}}}),prisma.inventoryItem.count({where:{dispositionStatus:"DONATED"}}),prisma.inventoryItem.count({where:{dispositionStatus:"DISCARDED"}}),prisma.inventoryItem.count({where:{dispositionStatus:"TRASHED"}}),prisma.sale.count({where:{status:"NEW"}}),prisma.sale.findMany({where:{status:{notIn:["NEW","CANCELLED"]}},include:{lines:{include:{inventoryItem:true}}},orderBy:{soldAt:"desc"}})]);const now=new Date(),today=startOfDay(now),week=startOfWeek(now),month=startOfMonth(now);return NextResponse.json({active,needsPhotos,photosDone,listed,sold:soldMarked+soldZeroQty,donated,discarded:discarded+legacyTrashed,needsMatch,salesMetrics:{today:metrics(sales.filter(s=>s.soldAt>=today)),week:metrics(sales.filter(s=>s.soldAt>=week)),month:metrics(sales.filter(s=>s.soldAt>=month))}})}
