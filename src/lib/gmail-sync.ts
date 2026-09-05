@@ -41,28 +41,38 @@ async function processStoredEmail(email:any){
 
 export async function syncGmail(){
  const run=await prisma.syncRun.create({data:{source:"gmail",status:"RUNNING"}});
- let found=0,parsed=0,reprocessed=0;
+ let found=0,parsed=0,reprocessed=0,skipped=0;
+ const errors:string[]=[];
  try{
   const pending=await prisma.emailMessage.findMany({where:{parsed:false,marketplace:{not:null}},orderBy:{receivedAt:"desc"},take:500});
-  for(const email of pending){if(await processStoredEmail(email)){parsed++;reprocessed++;}}
+  for(const email of pending){
+   try{if(await processStoredEmail(email)){parsed++;reprocessed++;}}
+   catch(e:any){skipped++;if(errors.length<3)errors.push(`stored ${email.messageId}: ${e?.message||String(e)}`)}
+  }
 
   const list=await gmailJson("messages?q="+encodeURIComponent("newer_than:30d (from:poshmark OR from:mercari OR from:depop OR from:ebay)")+"&maxResults=500");
   for(const m of list.messages||[]){
-   const existing=await prisma.emailMessage.findUnique({where:{messageId:m.id}});
-   if(existing){
-    if(await processStoredEmail(existing)) parsed++;
-    continue;
+   try{
+    const existing=await prisma.emailMessage.findUnique({where:{messageId:m.id}});
+    if(existing){
+     if(await processStoredEmail(existing)) parsed++;
+     continue;
+    }
+    const full=await gmailJson(`messages/${m.id}?format=full`), headers=full.payload?.headers||[];
+    const h=(name:string)=>headers.find((x:any)=>x.name?.toLowerCase()===name)?.value||"";
+    const sender=h("from"),subject=h("subject"),marketplace=marketplaceFrom(sender,subject),body=messageText(full.payload);
+    const receivedAt=full.internalDate?new Date(Number(full.internalDate)):new Date();
+    const created=await prisma.emailMessage.create({data:{messageId:m.id,threadId:full.threadId||null,sender,subject,receivedAt,snippet:full.snippet||null,bodyText:body,marketplace}});
+    found++;
+    if(await processStoredEmail(created)) parsed++;
+   }catch(e:any){
+    skipped++;
+    if(errors.length<3)errors.push(`message ${m.id}: ${e?.message||String(e)}`);
    }
-   const full=await gmailJson(`messages/${m.id}?format=full`), headers=full.payload?.headers||[];
-   const h=(name:string)=>headers.find((x:any)=>x.name?.toLowerCase()===name)?.value||"";
-   const sender=h("from"),subject=h("subject"),marketplace=marketplaceFrom(sender,subject),body=messageText(full.payload);
-   const receivedAt=full.internalDate?new Date(Number(full.internalDate)):new Date();
-   const created=await prisma.emailMessage.create({data:{messageId:m.id,threadId:full.threadId||null,sender,subject,receivedAt,snippet:full.snippet||null,bodyText:body,marketplace}});
-   found++;
-   if(await processStoredEmail(created)) parsed++;
   }
-  await prisma.syncRun.update({where:{id:run.id},data:{finishedAt:new Date(),status:"SUCCESS",itemsFound:found,message:`${parsed} sales parsed (${reprocessed} from existing emails)`}});
-  return {found,parsed,reprocessed};
+  const detail=errors.length?` · ${skipped} skipped · ${errors.join(" | ")}`:skipped?` · ${skipped} skipped`:"";
+  await prisma.syncRun.update({where:{id:run.id},data:{finishedAt:new Date(),status:"SUCCESS",itemsFound:found,message:`${parsed} sales parsed (${reprocessed} from existing emails)${detail}`}});
+  return {found,parsed,reprocessed,skipped,errors};
  }catch(e:any){
   await prisma.syncRun.update({where:{id:run.id},data:{finishedAt:new Date(),status:"ERROR",itemsFound:found,message:e.message}});
   throw e;
