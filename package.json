@@ -10,6 +10,7 @@
     "db:seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
     "@prisma/client": "^6.13.0",
     "exceljs": "^4.4.0",
     "next": "^15.4.6",
