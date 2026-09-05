@@ -1,4 +1,4 @@
-import { decryptSecret } from "./secrets";
+import { decryptSecret,encryptSecret } from "./secrets";
 import { prisma } from "./prisma";
 
 export const gmailScope="https://www.googleapis.com/auth/gmail.readonly";
@@ -26,8 +26,10 @@ export async function accessToken(){
  if(a.accessTokenEnc && a.tokenExpiresAt && a.tokenExpiresAt.getTime()>Date.now()+60000) return decryptSecret(a.accessTokenEnc);
  const c=oauthConfig(),refresh=decryptSecret(a.refreshTokenEnc);
  const r=await fetch("https://oauth2.googleapis.com/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:c.clientId,client_secret:c.secret,refresh_token:refresh,grant_type:"refresh_token"})});
- if(!r.ok) throw new Error("Could not refresh Gmail token");
+ if(!r.ok){const detail=(await r.text()).slice(0,500);throw new Error(`Could not refresh Gmail token (${r.status})${detail?`: ${detail}`:""}`)}
  const d=await r.json();
+ if(!d.access_token) throw new Error("Gmail refresh response did not include an access token");
+ await prisma.connectedAccount.update({where:{provider:"gmail"},data:{accessTokenEnc:encryptSecret(d.access_token),tokenExpiresAt:d.expires_in?new Date(Date.now()+Number(d.expires_in)*1000):null}});
  return d.access_token as string;
 }
 function decode(s?:string){if(!s)return "";return Buffer.from(s.replace(/-/g,"+").replace(/_/g,"/"),"base64").toString("utf8")}
@@ -36,7 +38,16 @@ export function messageText(payload:any):string{
  for(const p of payload?.parts||[]){const t=messageText(p);if(t)return t}
  return payload?.body?.data?decode(payload.body.data):"";
 }
+function sleep(ms:number){return new Promise(resolve=>setTimeout(resolve,ms))}
 export async function gmailJson(path:string){
- const token=await accessToken();const r=await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/${path}`,{headers:{Authorization:`Bearer ${token}`}});
- if(!r.ok)throw new Error(`Gmail API error ${r.status}`);return r.json();
+ const token=await accessToken();
+ let last="";
+ for(let attempt=0;attempt<4;attempt++){
+  const r=await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/${path}`,{headers:{Authorization:`Bearer ${token}`}});
+  if(r.ok)return r.json();
+  last=(await r.text()).slice(0,700);
+  if((r.status===403||r.status===429||r.status>=500)&&attempt<3){await sleep(500*Math.pow(2,attempt));continue}
+  throw new Error(`Gmail API error ${r.status}${last?`: ${last}`:""}`);
+ }
+ throw new Error(`Gmail API request failed${last?`: ${last}`:""}`);
 }
