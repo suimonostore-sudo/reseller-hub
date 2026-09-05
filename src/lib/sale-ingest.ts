@@ -34,6 +34,17 @@ function chooseUnique<T extends {title:string}>(title:string, candidates:T[], mi
   }
   return best&&bestScore>=minimum&&bestScore-second>=gap?{item:best,score:bestScore}:null;
 }
+function chooseUniquePrefix<T extends {title:string}>(title:string,candidates:T[]){
+  const n=norm(title);
+  const words=n.split(" ").filter(Boolean);
+  if(n.length<28||words.length<5)return null;
+  const hits=candidates.filter(item=>{
+    if(hasSizeConflict(title,item.title))return false;
+    const c=norm(item.title);
+    return c.startsWith(n)||n.startsWith(c);
+  });
+  return hits.length===1?{item:hits[0],score:.97}:null;
+}
 const activeInventory={dispositionStatus:"ACTIVE",quantity:{gt:0}} as const;
 
 export async function findBestMatch(platform:Platform, externalListingId:string|undefined, title:string, sku?:string){
@@ -71,6 +82,8 @@ export async function findBestMatch(platform:Platform, externalListingId:string|
   if(exactTitle?.inventoryItem) return {item:exactTitle.inventoryItem,method:"EXACT_LISTING_TITLE",confidence:.98};
 
   const listingCandidates=listings.filter(l=>l.inventoryItem).map(l=>({title:l.title,item:l.inventoryItem!}));
+  const prefixListing=chooseUniquePrefix(title,listingCandidates);
+  if(prefixListing) return {item:prefixListing.item.item,method:"TRUNCATED_LISTING_TITLE",confidence:prefixListing.score};
   const pickedListing=chooseUnique(title,listingCandidates,0.86,0.07);
   if(pickedListing) return {item:pickedListing.item.item,method:"TITLE_SIMILARITY",confidence:pickedListing.score};
 
@@ -78,6 +91,8 @@ export async function findBestMatch(platform:Platform, externalListingId:string|
   const exactItem=items.find(i=>norm(i.title)===n && !hasSizeConflict(title,i.title));
   if(exactItem) return {item:exactItem,method:"EXACT_INVENTORY_TITLE",confidence:.95};
 
+  const prefixItem=chooseUniquePrefix(title,items);
+  if(prefixItem) return {item:prefixItem.item,method:"TRUNCATED_INVENTORY_TITLE",confidence:prefixItem.score};
   const pickedItem=chooseUnique(title,items,0.92,0.08);
   if(pickedItem) return {item:pickedItem.item,method:"INVENTORY_TITLE_SIMILARITY",confidence:pickedItem.score};
 
