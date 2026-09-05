@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/cron/gmail",
+      "path": "/api/cron/nifty",
       "schedule": "0 12 * * *"
     }
   ]
