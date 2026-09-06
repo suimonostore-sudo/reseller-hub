@@ -20,18 +20,21 @@ function ordersFrom(v:any):any[]{if(Array.isArray(v))return v;for(const k of ["o
 function pick(o:any,...keys:string[]){for(const k of keys)if(o?.[k]!=null)return o[k]}
 function linesFrom(o:any):any[]{for(const k of ["items","lineItems","line_items"])if(Array.isArray(o?.[k])&&o[k].length)return o[k];return [o]}
 
-async function matchItem(sku:string,title:string){
+async function matchItem(sku:string,title:string,preferredItemId?:number|null){
   if(!sku)return {item:null,ambiguous:false,matches:[] as any[]};
   const rows=await prisma.inventoryItem.findMany({where:{sourceSku:{equals:sku,mode:"insensitive"}},orderBy:[{createdAt:"asc"},{id:"asc"}]});
+  if(preferredItemId){const preferred=rows.find(x=>x.id===preferredItemId);if(preferred)return {item:preferred,ambiguous:false,matches:rows}}
   if(rows.length===1)return {item:rows[0],ambiguous:false,matches:rows};
   const exact=rows.filter(x=>norm(x.title)===norm(title));
   if(exact.length===1)return {item:exact[0],ambiguous:false,matches:exact};
   const pool=exact.length?exact:rows;
   if(pool.length>1){
+    const available=pool.filter(x=>Number(x.quantity)>0&&norm(x.dispositionStatus)!=="sold").sort((a,b)=>a.id-b.id);
+    const availableOriginals=available.filter(x=>/^RH-\d+$/i.test(x.sku));
+    if(availableOriginals.length)return {item:availableOriginals[0],ambiguous:false,matches:pool};
+    if(available.length)return {item:available[0],ambiguous:false,matches:pool};
     const originals=pool.filter(x=>/^RH-\d+$/i.test(x.sku)).sort((a,b)=>a.id-b.id);
-    if(originals.length>=1)return {item:originals[0],ambiguous:false,matches:pool};
-    const sold=pool.filter(x=>norm(x.dispositionStatus)==="sold").sort((a,b)=>a.id-b.id);
-    if(sold.length>=1)return {item:sold[0],ambiguous:false,matches:pool};
+    if(originals.length)return {item:originals[0],ambiguous:false,matches:pool};
     const ordered=[...pool].sort((a,b)=>a.id-b.id);
     return {item:ordered[0],ambiguous:false,matches:pool};
   }
@@ -49,6 +52,29 @@ async function findExistingSale(p:Platform,external:string,itemIds:number[],sold
 }
 async function claimIngestionKey(saleId:number,ingestionKey:string){const owner=await prisma.sale.findUnique({where:{ingestionKey}});if(owner&&owner.id!==saleId)return owner;return null}
 
+function quantityByItem(lines:{inventoryItemId:number|null,quantity:number}[]){
+  const out=new Map<number,number>();
+  for(const l of lines){if(l.inventoryItemId==null)continue;out.set(l.inventoryItemId,(out.get(l.inventoryItemId)||0)+Math.max(0,Number(l.quantity)||0))}
+  return out;
+}
+async function applyInventoryDelta(itemId:number,delta:number,soldAt:Date,p:Platform){
+  if(!delta)return;
+  const item=await prisma.inventoryItem.findUnique({where:{id:itemId}});
+  if(!item)return;
+  if(delta>0){
+    const remaining=Math.max(0,Number(item.quantity||0)-delta);
+    const data:any={quantity:remaining};
+    if(remaining===0){data.dispositionStatus="SOLD";data.disposedAt=soldAt;data.dispositionNote=`Sold via Nifty ${String(p)}`;data.unlisted=true}
+    else if(norm(item.dispositionStatus)==="sold"){data.dispositionStatus="ACTIVE";data.disposedAt=null}
+    await prisma.inventoryItem.update({where:{id:itemId},data});
+    return;
+  }
+  const remaining=Number(item.quantity||0)+Math.abs(delta);
+  const data:any={quantity:remaining};
+  if(remaining>0&&norm(item.dispositionStatus)==="sold"){data.dispositionStatus="ACTIVE";data.disposedAt=null}
+  await prisma.inventoryItem.update({where:{id:itemId},data});
+}
+
 export async function POST(req:NextRequest){
   const started=new Date();
   let found=0,synced=0,created=0,ambiguous=0,skipped=0;
@@ -63,7 +89,9 @@ export async function POST(req:NextRequest){
     for(let page=0;page<20;page++){
       const result=await client.callTool({name:"search_orders",arguments:{startDate:start.toISOString().replace("Z",""),endDate:end.toISOString().replace("Z",""),sort:"sold_at",sortOrder:"desc",page,limit:50}});
       if(result?.isError)throw new Error(`Nifty search_orders returned an MCP tool error: ${JSON.stringify(result?.content||result).slice(0,1500)}`);
-      const payload=jsonFromResult(result),batch=ordersFrom(payload);all.push(...batch);if(payload?.hasMore===false||batch.length<50)break;
+      const payload=jsonFromResult(result),batch=ordersFrom(payload);all.push(...batch);
+      if(payload?.hasMore===false)break;
+      if(payload?.hasMore==null&&batch.length<50)break;
     }
     found=all.length;
     for(const o of all){
@@ -72,10 +100,15 @@ export async function POST(req:NextRequest){
       const status=norm(pick(o,"status","orderStatus","order_status"));
       if(!external||!p){skipped++;continue}
       const ingestionKey=`nifty:${String(p).toLowerCase()}:${external}`;
+      const boundSale=await prisma.sale.findFirst({where:{OR:[{platform:p,externalOrderId:external},{ingestionKey}]},include:{lines:{orderBy:{id:"asc"}}},orderBy:{createdAt:"asc"}});
       if(status.includes("cancel")){
-        const old=await prisma.sale.findFirst({where:{platform:p,externalOrderId:external}})||await prisma.sale.findUnique({where:{ingestionKey}});
-        if(old)await prisma.sale.update({where:{id:old.id},data:{externalOrderId:external,ingestionKey,status:SaleStatus.CANCELLED}});
-        else await prisma.sale.create({data:{platform:p,externalOrderId:external,ingestionKey,saleAmount:0,status:SaleStatus.CANCELLED,soldAt:new Date(pick(o,"soldAt","sold_at")||Date.now())}});
+        if(boundSale){
+          if(boundSale.status!==SaleStatus.CANCELLED){
+            const prior=quantityByItem(boundSale.lines);
+            for(const [itemId,qty] of prior)await applyInventoryDelta(itemId,-qty,new Date(pick(o,"soldAt","sold_at")||Date.now()),p);
+          }
+          await prisma.sale.update({where:{id:boundSale.id},data:{externalOrderId:external,ingestionKey,status:SaleStatus.CANCELLED}});
+        }else await prisma.sale.create({data:{platform:p,externalOrderId:external,ingestionKey,saleAmount:0,status:SaleStatus.CANCELLED,soldAt:new Date(pick(o,"soldAt","sold_at")||Date.now())}});
         continue;
       }
 
@@ -83,13 +116,16 @@ export async function POST(req:NextRequest){
       const matched:any[]=[];
       const pendingCreates:any[]=[];
       let orderAmbiguous=false,orderUnmatched=false;
-      for(const line of rawLines){
+      for(let lineIndex=0;lineIndex<rawLines.length;lineIndex++){
+        const line=rawLines[lineIndex];
         const sku=String(pick(line,"sku","SKU")||pick(o,"sku","SKU")||"").trim();
         const title=String(pick(line,"title","itemTitle","item_title","name")||pick(o,"title","itemTitle","item_title")||"").trim();
-        const result=await matchItem(sku,title);
+        const sameTitle=boundSale?.lines?.filter((x:any)=>norm(x.title)===norm(title))||[];
+        const preferredItemId=(sameTitle.length===1?sameTitle[0]?.inventoryItemId:boundSale?.lines?.[lineIndex]?.inventoryItemId)??null;
+        const result=await matchItem(sku,title,preferredItemId);
         if(result.ambiguous){
           orderAmbiguous=true;
-          ambiguousDetails.push({externalOrderId:external,platform:String(p),sku,title,candidateCount:result.matches.length,candidates:result.matches.slice(0,10).map((x:any)=>({id:x.id,sku:x.sku,sourceSku:x.sourceSku,title:x.title,dispositionStatus:x.dispositionStatus,workflowStatus:x.workflowStatus}))});
+          ambiguousDetails.push({externalOrderId:external,platform:String(p),sku,title,candidateCount:result.matches.length,candidates:result.matches.slice(0,10).map((x:any)=>({id:x.id,sku:x.sku,sourceSku:x.sourceSku,title:x.title,dispositionStatus:x.dispositionStatus,workflowStatus:x.workflowStatus,quantity:x.quantity}))});
           break;
         }
         const lineCogs=optionalNum(pick(line,"cogs","cost","costOfGoods","cost_of_goods"));
@@ -102,13 +138,13 @@ export async function POST(req:NextRequest){
       if(orderAmbiguous){ambiguous++;continue}
       if(orderUnmatched||matched.length+pendingCreates.length!==rawLines.length||rawLines.length===0){skipped++;continue}
 
+      const soldAt=new Date(pick(o,"soldAt","sold_at")||Date.now());
       for(const m of pendingCreates){
-        const item=await prisma.inventoryItem.create({data:{sku:await nextSku(),sourceSku:m.sku,title:m.title,cogs:m.lineCogs,quantity:0,unlisted:true,workflowStatus:"LISTED",dispositionStatus:"SOLD",disposedAt:new Date(pick(o,"soldAt","sold_at")||Date.now()),dispositionNote:`Sold via Nifty ${String(p)}`}});
+        const item=await prisma.inventoryItem.create({data:{sku:await nextSku(),sourceSku:m.sku,title:m.title,cogs:m.lineCogs,quantity:0,unlisted:true,workflowStatus:"LISTED",dispositionStatus:"SOLD",disposedAt:soldAt,dispositionNote:`Sold via Nifty ${String(p)}`}});
         created++;
         matched.push({item,title:m.title,lineCogs:m.lineCogs,linePrice:m.linePrice,qty:m.qty});
       }
 
-      const soldAt=new Date(pick(o,"soldAt","sold_at")||Date.now());
       const lineTotal=matched.reduce((s,x)=>s+x.linePrice*x.qty,0);
       const itemPrice=num(pick(o,"salePrice","sale_price","saleAmount","sale_amount","subtotal","total"),lineTotal);
       const collectedShipping=num(pick(o,"collectedShipping","collected_shipping"));
@@ -120,11 +156,17 @@ export async function POST(req:NextRequest){
       let existing=await findExistingSale(p,external,matched.map(x=>x.item.id),soldAt,ingestionKey);
       const data={platform:p,externalOrderId:external,ingestionKey,matchMethod:matched.length>1?"NIFTY_BUNDLE_SKU_EXACT":"NIFTY_SKU_EXACT",matchConfidence:1,saleAmount,fees,shippingCost:shipping,status:SaleStatus.MATCHED,soldAt};
       if(existing){const keyOwner=await claimIngestionKey(existing.id,ingestionKey);if(keyOwner)existing=keyOwner}
+      const priorLines=existing?await prisma.saleLine.findMany({where:{saleId:existing.id}}):[];
+      const priorByItem=existing?.status===SaleStatus.CANCELLED?new Map<number,number>():quantityByItem(priorLines);
       const sale=existing?await prisma.sale.update({where:{id:existing.id},data}):await prisma.sale.create({data});
       await prisma.saleLine.deleteMany({where:{saleId:sale.id}});
-      for(const m of matched){
-        await prisma.saleLine.create({data:{saleId:sale.id,inventoryItemId:m.item.id,title:m.title,quantity:m.qty,unitPrice:m.linePrice,cogsAtSale:m.lineCogs??m.item.cogs}});
-        await prisma.inventoryItem.update({where:{id:m.item.id},data:{dispositionStatus:"SOLD",disposedAt:soldAt,dispositionNote:`Sold via Nifty ${String(p)}`,quantity:0,unlisted:true}});
+      for(const m of matched)await prisma.saleLine.create({data:{saleId:sale.id,inventoryItemId:m.item.id,title:m.title,quantity:m.qty,unitPrice:m.linePrice,cogsAtSale:m.lineCogs??m.item.cogs}});
+
+      const newByItem=quantityByItem(matched.map(m=>({inventoryItemId:m.item.id,quantity:m.qty})));
+      const itemIds=new Set<number>([...priorByItem.keys(),...newByItem.keys()]);
+      for(const itemId of itemIds){
+        const delta=(newByItem.get(itemId)||0)-(priorByItem.get(itemId)||0);
+        await applyInventoryDelta(itemId,delta,soldAt,p);
       }
       synced++;
     }
