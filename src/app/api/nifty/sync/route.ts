@@ -23,14 +23,18 @@ function linesFrom(o:any):any[]{for(const k of ["items","lineItems","line_items"
 async function matchItem(sku:string,title:string){
   if(!sku)return {item:null,ambiguous:false,matches:[] as any[]};
   const rows=await prisma.inventoryItem.findMany({where:{sourceSku:{equals:sku,mode:"insensitive"}},orderBy:{createdAt:"asc"}});
+  if(rows.length===1)return {item:rows[0],ambiguous:false,matches:rows};
   const exact=rows.filter(x=>norm(x.title)===norm(title));
   if(exact.length===1)return {item:exact[0],ambiguous:false,matches:exact};
-  if(exact.length>1){
-    const originals=exact.filter(x=>/^RH-\d+$/i.test(x.sku));
-    if(originals.length===1)return {item:originals[0],ambiguous:false,matches:exact};
-    return {item:null,ambiguous:true,matches:exact};
+  const pool=exact.length?exact:rows;
+  if(pool.length>1){
+    const originals=pool.filter(x=>/^RH-\d+$/i.test(x.sku));
+    if(originals.length===1)return {item:originals[0],ambiguous:false,matches:pool};
+    const sold=pool.filter(x=>norm(x.dispositionStatus)==="sold");
+    if(sold.length===1)return {item:sold[0],ambiguous:false,matches:pool};
+    return {item:null,ambiguous:true,matches:pool};
   }
-  return {item:null,ambiguous:false,matches:exact};
+  return {item:null,ambiguous:false,matches:pool};
 }
 async function nextSku(){const rows=await prisma.inventoryItem.findMany({where:{sku:{startsWith:"RH-"}},select:{sku:true}});let n=0;for(const r of rows){const m=/^RH-(\d+)$/i.exec(r.sku);if(m)n=Math.max(n,Number(m[1]))}return `RH-${String(n+1).padStart(6,"0")}`}
 async function findExistingSale(p:Platform,external:string,itemIds:number[],soldAt:Date,ingestionKey:string){
@@ -58,7 +62,7 @@ export async function POST(req:NextRequest){
     for(let page=0;page<20;page++){
       const result=await client.callTool({name:"search_orders",arguments:{startDate:start.toISOString().replace("Z",""),endDate:end.toISOString().replace("Z",""),sort:"sold_at",sortOrder:"desc",page,limit:50}});
       if(result?.isError)throw new Error(`Nifty search_orders returned an MCP tool error: ${JSON.stringify(result?.content||result).slice(0,1500)}`);
-      const batch=ordersFrom(jsonFromResult(result));all.push(...batch);if(batch.length<50)break;
+      const payload=jsonFromResult(result),batch=ordersFrom(payload);all.push(...batch);if(payload?.hasMore===false||batch.length<50)break;
     }
     found=all.length;
     for(const o of all){
@@ -76,37 +80,36 @@ export async function POST(req:NextRequest){
 
       const rawLines=linesFrom(o);
       const matched:any[]=[];
+      const pendingCreates:any[]=[];
       let orderAmbiguous=false,orderUnmatched=false;
       for(const line of rawLines){
         const sku=String(pick(line,"sku","SKU")||pick(o,"sku","SKU")||"").trim();
         const title=String(pick(line,"title","itemTitle","item_title","name")||pick(o,"title","itemTitle","item_title")||"").trim();
-        let {item,ambiguous:amb,matches}=await matchItem(sku,title);
-        if(amb){
+        const result=await matchItem(sku,title);
+        if(result.ambiguous){
           orderAmbiguous=true;
-          ambiguousDetails.push({
-            externalOrderId:external,
-            platform:String(p),
-            sku,
-            title,
-            candidateCount:matches.length,
-            candidates:matches.slice(0,10).map((x:any)=>({id:x.id,sku:x.sku,sourceSku:x.sourceSku,title:x.title,dispositionStatus:x.dispositionStatus,workflowStatus:x.workflowStatus}))
-          });
+          ambiguousDetails.push({externalOrderId:external,platform:String(p),sku,title,candidateCount:result.matches.length,candidates:result.matches.slice(0,10).map((x:any)=>({id:x.id,sku:x.sku,sourceSku:x.sourceSku,title:x.title,dispositionStatus:x.dispositionStatus,workflowStatus:x.workflowStatus}))});
           break;
         }
         const lineCogs=optionalNum(pick(line,"cogs","cost","costOfGoods","cost_of_goods"));
-        if(!item&&sku&&title){
-          item=await prisma.inventoryItem.create({data:{sku:await nextSku(),sourceSku:sku,title,cogs:lineCogs,quantity:0,unlisted:true,workflowStatus:"LISTED",dispositionStatus:"SOLD",disposedAt:new Date(pick(o,"soldAt","sold_at")||Date.now()),dispositionNote:`Sold via Nifty ${String(p)}`}});created++;
-        }
-        if(!item){orderUnmatched=true;break}
         const linePrice=num(pick(line,"salePrice","sale_price","price","saleAmount","sale_amount"));
         const qty=Math.max(1,Math.trunc(num(pick(line,"quantity","qty"))||1));
-        matched.push({item,title:title||item.title,lineCogs,linePrice,qty});
+        if(result.item)matched.push({item:result.item,title:title||result.item.title,lineCogs,linePrice,qty});
+        else if(sku&&title)pendingCreates.push({sku,title,lineCogs,linePrice,qty});
+        else {orderUnmatched=true;break}
       }
       if(orderAmbiguous){ambiguous++;continue}
-      if(orderUnmatched||matched.length===0){skipped++;continue}
+      if(orderUnmatched||matched.length+pendingCreates.length!==rawLines.length||rawLines.length===0){skipped++;continue}
+
+      for(const m of pendingCreates){
+        const item=await prisma.inventoryItem.create({data:{sku:await nextSku(),sourceSku:m.sku,title:m.title,cogs:m.lineCogs,quantity:0,unlisted:true,workflowStatus:"LISTED",dispositionStatus:"SOLD",disposedAt:new Date(pick(o,"soldAt","sold_at")||Date.now()),dispositionNote:`Sold via Nifty ${String(p)}`}});
+        created++;
+        matched.push({item,title:m.title,lineCogs:m.lineCogs,linePrice:m.linePrice,qty:m.qty});
+      }
 
       const soldAt=new Date(pick(o,"soldAt","sold_at")||Date.now());
-      const itemPrice=num(pick(o,"salePrice","sale_price","saleAmount","sale_amount","subtotal","total"),matched.reduce((s,x)=>s+x.linePrice*x.qty,0));
+      const lineTotal=matched.reduce((s,x)=>s+x.linePrice*x.qty,0);
+      const itemPrice=num(pick(o,"salePrice","sale_price","saleAmount","sale_amount","subtotal","total"),lineTotal);
       const collectedShipping=num(pick(o,"collectedShipping","collected_shipping"));
       const refund=num(pick(o,"refundAmount","refund_amount"));
       const saleAmount=itemPrice+collectedShipping-refund;
@@ -114,7 +117,7 @@ export async function POST(req:NextRequest){
       const rawShipping=optionalNum(pick(o,"sellerShippingFee","seller_shipping_fee","shippingCost","shipping_cost"));
       const shipping=p===Platform.EBAY?(rawShipping!=null&&rawShipping>0?rawShipping:null):(rawShipping??0);
       let existing=await findExistingSale(p,external,matched.map(x=>x.item.id),soldAt,ingestionKey);
-      const data={platform:p,externalOrderId:external,ingestionKey,matchMethod:"NIFTY_SKU_EXACT",matchConfidence:1,saleAmount,fees,shippingCost:shipping,status:SaleStatus.MATCHED,soldAt};
+      const data={platform:p,externalOrderId:external,ingestionKey,matchMethod:matched.length>1?"NIFTY_BUNDLE_SKU_EXACT":"NIFTY_SKU_EXACT",matchConfidence:1,saleAmount,fees,shippingCost:shipping,status:SaleStatus.MATCHED,soldAt};
       if(existing){const keyOwner=await claimIngestionKey(existing.id,ingestionKey);if(keyOwner)existing=keyOwner}
       const sale=existing?await prisma.sale.update({where:{id:existing.id},data}):await prisma.sale.create({data});
       await prisma.saleLine.deleteMany({where:{saleId:sale.id}});
