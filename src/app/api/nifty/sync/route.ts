@@ -40,39 +40,39 @@ async function matchItem(sku:string,title:string,preferredItemId?:number|null){
   }
   return {item:null,ambiguous:false,matches:pool};
 }
-async function nextSku(){const rows=await prisma.inventoryItem.findMany({where:{sku:{startsWith:"RH-"}},select:{sku:true}});let n=0;for(const r of rows){const m=/^RH-(\d+)$/i.exec(r.sku);if(m)n=Math.max(n,Number(m[1]))}return `RH-${String(n+1).padStart(6,"0")}`}
-async function findExistingSale(p:Platform,external:string,itemIds:number[],soldAt:Date,ingestionKey:string){
-  const byExternal=await prisma.sale.findFirst({where:{platform:p,externalOrderId:external},orderBy:{createdAt:"asc"}});if(byExternal)return byExternal;
-  const byKey=await prisma.sale.findUnique({where:{ingestionKey}});if(byKey)return byKey;
+async function nextSku(db:any=prisma){const rows=await db.inventoryItem.findMany({where:{sku:{startsWith:"RH-"}},select:{sku:true}});let n=0;for(const r of rows){const m=/^RH-(\d+)$/i.exec(r.sku);if(m)n=Math.max(n,Number(m[1]))}return `RH-${String(n+1).padStart(6,"0")}`}
+async function findExistingSale(db:any,p:Platform,external:string,itemIds:number[],soldAt:Date,ingestionKey:string){
+  const byExternal=await db.sale.findFirst({where:{platform:p,externalOrderId:external},orderBy:{createdAt:"asc"}});if(byExternal)return byExternal;
+  const byKey=await db.sale.findUnique({where:{ingestionKey}});if(byKey)return byKey;
   const from=new Date(soldAt.getTime()-5*60*1000),to=new Date(soldAt.getTime()+5*60*1000);
-  const candidates=await prisma.sale.findMany({where:{platform:p,soldAt:{gte:from,lte:to},lines:{some:{inventoryItemId:{in:itemIds}}}},include:{lines:true},orderBy:{createdAt:"asc"}});
+  const candidates=await db.sale.findMany({where:{platform:p,soldAt:{gte:from,lte:to},lines:{some:{inventoryItemId:{in:itemIds}}}},include:{lines:true},orderBy:{createdAt:"asc"}});
   if(candidates.length===1)return candidates[0];
-  const allItemMatches=candidates.filter(s=>itemIds.every(id=>s.lines.some(l=>l.inventoryItemId===id)));
+  const allItemMatches=candidates.filter((s:any)=>itemIds.every(id=>s.lines.some((l:any)=>l.inventoryItemId===id)));
   return allItemMatches.length===1?allItemMatches[0]:null;
 }
-async function claimIngestionKey(saleId:number,ingestionKey:string){const owner=await prisma.sale.findUnique({where:{ingestionKey}});if(owner&&owner.id!==saleId)return owner;return null}
+async function claimIngestionKey(db:any,saleId:number,ingestionKey:string){const owner=await db.sale.findUnique({where:{ingestionKey}});if(owner&&owner.id!==saleId)return owner;return null}
 
 function quantityByItem(lines:{inventoryItemId:number|null,quantity:number}[]){
   const out=new Map<number,number>();
   for(const l of lines){if(l.inventoryItemId==null)continue;out.set(l.inventoryItemId,(out.get(l.inventoryItemId)||0)+Math.max(0,Number(l.quantity)||0))}
   return out;
 }
-async function applyInventoryDelta(itemId:number,delta:number,soldAt:Date,p:Platform){
+async function applyInventoryDelta(db:any,itemId:number,delta:number,soldAt:Date,p:Platform){
   if(!delta)return;
-  const item=await prisma.inventoryItem.findUnique({where:{id:itemId}});
+  const item=await db.inventoryItem.findUnique({where:{id:itemId}});
   if(!item)return;
   if(delta>0){
     const remaining=Math.max(0,Number(item.quantity||0)-delta);
     const data:any={quantity:remaining};
     if(remaining===0){data.dispositionStatus="SOLD";data.disposedAt=soldAt;data.dispositionNote=`Sold via Nifty ${String(p)}`;data.unlisted=true}
     else if(norm(item.dispositionStatus)==="sold"){data.dispositionStatus="ACTIVE";data.disposedAt=null}
-    await prisma.inventoryItem.update({where:{id:itemId},data});
+    await db.inventoryItem.update({where:{id:itemId},data});
     return;
   }
   const remaining=Number(item.quantity||0)+Math.abs(delta);
   const data:any={quantity:remaining};
   if(remaining>0&&norm(item.dispositionStatus)==="sold"){data.dispositionStatus="ACTIVE";data.disposedAt=null}
-  await prisma.inventoryItem.update({where:{id:itemId},data});
+  await db.inventoryItem.update({where:{id:itemId},data});
 }
 
 export async function POST(req:NextRequest){
@@ -102,13 +102,17 @@ export async function POST(req:NextRequest){
       const ingestionKey=`nifty:${String(p).toLowerCase()}:${external}`;
       const boundSale=await prisma.sale.findFirst({where:{OR:[{platform:p,externalOrderId:external},{ingestionKey}]},include:{lines:{orderBy:{id:"asc"}}},orderBy:{createdAt:"asc"}});
       if(status.includes("cancel")){
-        if(boundSale){
-          if(boundSale.status!==SaleStatus.CANCELLED){
-            const prior=quantityByItem(boundSale.lines);
-            for(const [itemId,qty] of prior)await applyInventoryDelta(itemId,-qty,new Date(pick(o,"soldAt","sold_at")||Date.now()),p);
-          }
-          await prisma.sale.update({where:{id:boundSale.id},data:{externalOrderId:external,ingestionKey,status:SaleStatus.CANCELLED}});
-        }else await prisma.sale.create({data:{platform:p,externalOrderId:external,ingestionKey,saleAmount:0,status:SaleStatus.CANCELLED,soldAt:new Date(pick(o,"soldAt","sold_at")||Date.now())}});
+        await prisma.$transaction(async tx=>{
+          const current=await tx.sale.findFirst({where:{OR:[{platform:p,externalOrderId:external},{ingestionKey}]},include:{lines:{orderBy:{id:"asc"}}},orderBy:{createdAt:"asc"}});
+          const cancelledAt=new Date(pick(o,"soldAt","sold_at")||Date.now());
+          if(current){
+            if(current.status!==SaleStatus.CANCELLED){
+              const prior=quantityByItem(current.lines);
+              for(const [itemId,qty] of prior)await applyInventoryDelta(tx,itemId,-qty,cancelledAt,p);
+            }
+            await tx.sale.update({where:{id:current.id},data:{externalOrderId:external,ingestionKey,status:SaleStatus.CANCELLED}});
+          }else await tx.sale.create({data:{platform:p,externalOrderId:external,ingestionKey,saleAmount:0,status:SaleStatus.CANCELLED,soldAt:cancelledAt}});
+        });
         continue;
       }
 
@@ -139,13 +143,7 @@ export async function POST(req:NextRequest){
       if(orderUnmatched||matched.length+pendingCreates.length!==rawLines.length||rawLines.length===0){skipped++;continue}
 
       const soldAt=new Date(pick(o,"soldAt","sold_at")||Date.now());
-      for(const m of pendingCreates){
-        const item=await prisma.inventoryItem.create({data:{sku:await nextSku(),sourceSku:m.sku,title:m.title,cogs:m.lineCogs,quantity:0,unlisted:true,workflowStatus:"LISTED",dispositionStatus:"SOLD",disposedAt:soldAt,dispositionNote:`Sold via Nifty ${String(p)}`}});
-        created++;
-        matched.push({item,title:m.title,lineCogs:m.lineCogs,linePrice:m.linePrice,qty:m.qty});
-      }
-
-      const lineTotal=matched.reduce((s,x)=>s+x.linePrice*x.qty,0);
+      const lineTotal=matched.reduce((s,x)=>s+x.linePrice*x.qty,0)+pendingCreates.reduce((s,x)=>s+x.linePrice*x.qty,0);
       const itemPrice=num(pick(o,"salePrice","sale_price","saleAmount","sale_amount","subtotal","total"),lineTotal);
       const collectedShipping=num(pick(o,"collectedShipping","collected_shipping"));
       const refund=num(pick(o,"refundAmount","refund_amount"));
@@ -153,21 +151,34 @@ export async function POST(req:NextRequest){
       const fees=num(pick(o,"sellerPlatformFee","seller_platform_fee","platformFee","platform_fee"))+num(pick(o,"sellerTransactionFee","seller_transaction_fee","transactionFee","transaction_fee","fees"))+num(pick(o,"sellerPromotedFee","seller_promoted_fee","promotedFee","promoted_fee"))+num(pick(o,"shippingExpenses","shipping_expenses"))+num(pick(o,"otherExpenses","other_expenses"));
       const rawShipping=optionalNum(pick(o,"sellerShippingFee","seller_shipping_fee","shippingCost","shipping_cost"));
       const shipping=p===Platform.EBAY?(rawShipping!=null&&rawShipping>0?rawShipping:null):(rawShipping??0);
-      let existing=await findExistingSale(p,external,matched.map(x=>x.item.id),soldAt,ingestionKey);
-      const data={platform:p,externalOrderId:external,ingestionKey,matchMethod:matched.length>1?"NIFTY_BUNDLE_SKU_EXACT":"NIFTY_SKU_EXACT",matchConfidence:1,saleAmount,fees,shippingCost:shipping,status:SaleStatus.MATCHED,soldAt};
-      if(existing){const keyOwner=await claimIngestionKey(existing.id,ingestionKey);if(keyOwner)existing=keyOwner}
-      const priorLines=existing?await prisma.saleLine.findMany({where:{saleId:existing.id}}):[];
-      const priorByItem=existing?.status===SaleStatus.CANCELLED?new Map<number,number>():quantityByItem(priorLines);
-      const sale=existing?await prisma.sale.update({where:{id:existing.id},data}):await prisma.sale.create({data});
-      await prisma.saleLine.deleteMany({where:{saleId:sale.id}});
-      for(const m of matched)await prisma.saleLine.create({data:{saleId:sale.id,inventoryItemId:m.item.id,title:m.title,quantity:m.qty,unitPrice:m.linePrice,cogsAtSale:m.lineCogs??m.item.cogs}});
 
-      const newByItem=quantityByItem(matched.map(m=>({inventoryItemId:m.item.id,quantity:m.qty})));
-      const itemIds=new Set<number>([...priorByItem.keys(),...newByItem.keys()]);
-      for(const itemId of itemIds){
-        const delta=(newByItem.get(itemId)||0)-(priorByItem.get(itemId)||0);
-        await applyInventoryDelta(itemId,delta,soldAt,p);
-      }
+      const createdThisOrder=await prisma.$transaction(async tx=>{
+        const txMatched=[...matched];
+        let txCreated=0;
+        for(const m of pendingCreates){
+          const item=await tx.inventoryItem.create({data:{sku:await nextSku(tx),sourceSku:m.sku,title:m.title,cogs:m.lineCogs,quantity:0,unlisted:true,workflowStatus:"LISTED",dispositionStatus:"SOLD",disposedAt:soldAt,dispositionNote:`Sold via Nifty ${String(p)}`}});
+          txCreated++;
+          txMatched.push({item,title:m.title,lineCogs:m.lineCogs,linePrice:m.linePrice,qty:m.qty});
+        }
+
+        let existing=await findExistingSale(tx,p,external,txMatched.map(x=>x.item.id),soldAt,ingestionKey);
+        const data={platform:p,externalOrderId:external,ingestionKey,matchMethod:txMatched.length>1?"NIFTY_BUNDLE_SKU_EXACT":"NIFTY_SKU_EXACT",matchConfidence:1,saleAmount,fees,shippingCost:shipping,status:SaleStatus.MATCHED,soldAt};
+        if(existing){const keyOwner=await claimIngestionKey(tx,existing.id,ingestionKey);if(keyOwner)existing=keyOwner}
+        const priorLines=existing?await tx.saleLine.findMany({where:{saleId:existing.id}}):[];
+        const priorByItem=existing?.status===SaleStatus.CANCELLED?new Map<number,number>():quantityByItem(priorLines);
+        const sale=existing?await tx.sale.update({where:{id:existing.id},data}):await tx.sale.create({data});
+        await tx.saleLine.deleteMany({where:{saleId:sale.id}});
+        for(const m of txMatched)await tx.saleLine.create({data:{saleId:sale.id,inventoryItemId:m.item.id,title:m.title,quantity:m.qty,unitPrice:m.linePrice,cogsAtSale:m.lineCogs??m.item.cogs}});
+
+        const newByItem=quantityByItem(txMatched.map(m=>({inventoryItemId:m.item.id,quantity:m.qty})));
+        const itemIds=new Set<number>([...priorByItem.keys(),...newByItem.keys()]);
+        for(const itemId of itemIds){
+          const delta=(newByItem.get(itemId)||0)-(priorByItem.get(itemId)||0);
+          await applyInventoryDelta(tx,itemId,delta,soldAt,p);
+        }
+        return txCreated;
+      });
+      created+=createdThisOrder;
       synced++;
     }
     await prisma.syncRun.create({data:{source:"nifty",startedAt:started,finishedAt:new Date(),status:"SUCCESS",itemsFound:found,message:`Synced ${synced}; created ${created}; ambiguous ${ambiguous}; skipped ${skipped}.`}});
