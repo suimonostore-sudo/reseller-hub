@@ -22,17 +22,18 @@ function linesFrom(o:any):any[]{for(const k of ["items","lineItems","line_items"
 
 async function matchItem(sku:string,title:string){
   if(!sku)return {item:null,ambiguous:false,matches:[] as any[]};
-  const rows=await prisma.inventoryItem.findMany({where:{sourceSku:{equals:sku,mode:"insensitive"}},orderBy:{createdAt:"asc"}});
+  const rows=await prisma.inventoryItem.findMany({where:{sourceSku:{equals:sku,mode:"insensitive"}},orderBy:[{createdAt:"asc"},{id:"asc"}]});
   if(rows.length===1)return {item:rows[0],ambiguous:false,matches:rows};
   const exact=rows.filter(x=>norm(x.title)===norm(title));
   if(exact.length===1)return {item:exact[0],ambiguous:false,matches:exact};
   const pool=exact.length?exact:rows;
   if(pool.length>1){
-    const originals=pool.filter(x=>/^RH-\d+$/i.test(x.sku));
-    if(originals.length===1)return {item:originals[0],ambiguous:false,matches:pool};
-    const sold=pool.filter(x=>norm(x.dispositionStatus)==="sold");
-    if(sold.length===1)return {item:sold[0],ambiguous:false,matches:pool};
-    return {item:null,ambiguous:true,matches:pool};
+    const originals=pool.filter(x=>/^RH-\d+$/i.test(x.sku)).sort((a,b)=>a.id-b.id);
+    if(originals.length>=1)return {item:originals[0],ambiguous:false,matches:pool};
+    const sold=pool.filter(x=>norm(x.dispositionStatus)==="sold").sort((a,b)=>a.id-b.id);
+    if(sold.length>=1)return {item:sold[0],ambiguous:false,matches:pool};
+    const ordered=[...pool].sort((a,b)=>a.id-b.id);
+    return {item:ordered[0],ambiguous:false,matches:pool};
   }
   return {item:null,ambiguous:false,matches:pool};
 }
