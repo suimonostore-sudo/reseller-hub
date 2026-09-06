@@ -40,6 +40,7 @@ async function matchItem(sku:string,title:string,preferredItemId?:number|null){
   }
   return {item:null,ambiguous:false,matches:pool};
 }
+async function lockSkuAllocation(db:any){await db.$queryRawUnsafe("SELECT pg_advisory_xact_lock(1874302211)")}
 async function nextSku(db:any=prisma){const rows=await db.inventoryItem.findMany({where:{sku:{startsWith:"RH-"}},select:{sku:true}});let n=0;for(const r of rows){const m=/^RH-(\d+)$/i.exec(r.sku);if(m)n=Math.max(n,Number(m[1]))}return `RH-${String(n+1).padStart(6,"0")}`}
 async function findExistingSale(db:any,p:Platform,external:string,itemIds:number[],soldAt:Date,ingestionKey:string){
   const byExternal=await db.sale.findFirst({where:{platform:p,externalOrderId:external},orderBy:{createdAt:"asc"}});if(byExternal)return byExternal;
@@ -155,6 +156,7 @@ export async function POST(req:NextRequest){
       const createdThisOrder=await prisma.$transaction(async tx=>{
         const txMatched=[...matched];
         let txCreated=0;
+        if(pendingCreates.length)await lockSkuAllocation(tx);
         for(const m of pendingCreates){
           const item=await tx.inventoryItem.create({data:{sku:await nextSku(tx),sourceSku:m.sku,title:m.title,cogs:m.lineCogs,quantity:0,unlisted:true,workflowStatus:"LISTED",dispositionStatus:"SOLD",disposedAt:soldAt,dispositionNote:`Sold via Nifty ${String(p)}`}});
           txCreated++;
