@@ -18,17 +18,24 @@ export async function GET(req:NextRequest){
   if(!Array.isArray(rows)||rows.length>150)return NextResponse.json({error:"Invalid batch"},{status:400});
 
   const existing=await prisma.inventoryItem.findMany({select:{id:true,sku:true,sourceSku:true,title:true,cogs:true,purchaseDate:true,purchaseStore:true,location:true,listings:{select:{externalId:true,platform:true}}}});
-  const bySku=new Map<string,number[]>(),bySource=new Map<string,number[]>(),byEbay=new Map<string,number[]>(),byTdc=new Map<string,number[]>(),byTds=new Map<string,number[]>();
+  const bySku=new Map<string,number[]>(),bySource=new Map<string,number[]>(),bySourceTitle=new Map<string,number[]>(),byEbay=new Map<string,number[]>(),byTdc=new Map<string,number[]>(),byTds=new Map<string,number[]>();
   const add=(m:Map<string,number[]>,k:string,id:number)=>{if(!k)return;const a=m.get(k)||[];if(!a.includes(id))a.push(id);m.set(k,a)};
   for(const x of existing){
    add(bySku,clean(x.sku),x.id); add(bySource,clean(x.sourceSku),x.id);
+   const xt=norm(x.title),xs=clean(x.sourceSku);
+   if(xs&&xt)add(bySourceTitle,`${xs}|${xt}`,x.id);
    for(const l of x.listings||[])if(String(l.platform)==="EBAY")add(byEbay,clean(l.externalId),x.id);
-   const t=norm(x.title),pd=day(x.purchaseDate?.toISOString()),c=x.cogs==null?"":Number(x.cogs).toFixed(2),s=norm(x.purchaseStore);
+   const t=xt,pd=day(x.purchaseDate?.toISOString()),c=x.cogs==null?"":Number(x.cogs).toFixed(2),s=norm(x.purchaseStore);
    if(t&&pd&&c)add(byTdc,`${t}|${pd}|${c}`,x.id);
    if(t&&pd&&s)add(byTds,`${t}|${pd}|${s}`,x.id);
   }
 
-  let imported=0,duplicates=0,ambiguous=0,failed=0; const details:any[]=[];
+  let imported=0,attached=0,duplicates=0,ambiguous=0,failed=0; const details:any[]=[];
+  const attachEbay=async(id:number,r:Row,eb:string)=>{
+    await prisma.listing.create({data:{platform:"EBAY",externalId:eb,title:clean(r.p)||"Untitled Flipwise item",quantity:Math.max(1,Number(r.ql||r.qp||1)||1),active:Math.max(0,Number(r.qr??r.qp??1)||0)>0,inventoryItemId:id}});
+    add(byEbay,eb,id); attached++;
+  };
+
   for(const r of rows){
    try{
     const cs=clean(r.cs),eb=clean(r.eb),t=norm(r.p),pd=day(r.pd),c=money(r.c),s=norm(r.st);
@@ -36,14 +43,31 @@ export async function GET(req:NextRequest){
     if(ebayHits.length===1){duplicates++;continue}
     if(ebayHits.length>1){ambiguous++;details.push({product:r.p,customSku:r.cs,ebayItemId:r.eb,reason:"duplicate ebay id",matches:ebayHits});continue}
 
+    // A matching source/custom SKU + normalized title is the strongest evidence that
+    // Flipwise is describing an RH item we already own. If there is exactly one match,
+    // attach the new eBay listing to that item instead of creating an FW26 duplicate.
+    // If several RH rows legitimately share that source/title (multiple physical units),
+    // stop as ambiguous rather than guessing which unit owns the listing.
+    const sourceTitleHits=cs&&t?(bySourceTitle.get(`${cs}|${t}`)||[]):[];
+    if(sourceTitleHits.length===1){
+      if(eb)await attachEbay(sourceTitleHits[0],r,eb);else duplicates++;
+      continue;
+    }
+    if(sourceTitleHits.length>1){ambiguous++;details.push({product:r.p,customSku:r.cs,ebayItemId:r.eb,reason:"multiple units with same source/title",matches:sourceTitleHits});continue}
+
     const composite=new Set<number>();
     if(t&&pd&&c!=null)for(const id of byTdc.get(`${t}|${pd}|${Number(c).toFixed(2)}`)||[])composite.add(id);
     if(t&&pd&&s)for(const id of byTds.get(`${t}|${pd}|${s}`)||[])composite.add(id);
-    if(composite.size===1){duplicates++;continue}
+    if(composite.size===1){
+      const id=[...composite][0];
+      if(eb)await attachEbay(id,r,eb);else duplicates++;
+      continue;
+    }
     if(composite.size>1){ambiguous++;details.push({product:r.p,customSku:r.cs,ebayItemId:r.eb,reason:"composite match",matches:[...composite]});continue}
 
-    // Flipwise often reused one custom SKU across a whole purchase batch. A new eBay item ID is
-    // therefore stronger evidence of a distinct item than a repeated source SKU.
+    // Without a marketplace ID, a reused RH/custom SKU is still useful duplicate evidence.
+    // With a marketplace ID we only create new inventory after the stronger source+title
+    // and purchase composites above fail, preventing listings from spawning duplicate items.
     if(!eb){
       const skuHits=new Set<number>();
       if(cs){for(const id of bySku.get(cs)||[])skuHits.add(id);for(const id of bySource.get(cs)||[])skuHits.add(id)}
@@ -64,10 +88,10 @@ export async function GET(req:NextRequest){
     }});
     if(eb){await prisma.listing.create({data:{platform:"EBAY",externalId:eb,title:item.title,quantity:Math.max(1,Number(r.ql||r.qp||1)||1),active:qty>0,inventoryItemId:item.id}})}
     imported++;
-    add(bySku,sku,item.id);if(cs)add(bySource,cs,item.id);if(eb)add(byEbay,eb,item.id);
+    add(bySku,sku,item.id);if(cs)add(bySource,cs,item.id);if(cs&&t)add(bySourceTitle,`${cs}|${t}`,item.id);if(eb)add(byEbay,eb,item.id);
     if(t&&pd&&c!=null)add(byTdc,`${t}|${pd}|${Number(c).toFixed(2)}`,item.id);if(t&&pd&&s)add(byTds,`${t}|${pd}|${s}`,item.id);
    }catch(e:any){failed++;details.push({product:r.p,error:e?.message||String(e)})}
   }
-  return NextResponse.json({rows:rows.length,imported,duplicates,ambiguous,failed,details:details.slice(0,20)});
+  return NextResponse.json({rows:rows.length,imported,attached,duplicates,ambiguous,failed,details:details.slice(0,20)});
  }catch(e:any){return NextResponse.json({error:e?.message||String(e)},{status:500})}
 }
