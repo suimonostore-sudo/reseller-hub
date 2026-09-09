@@ -11,7 +11,7 @@ type Workflow="NEEDS_PHOTOS"|"PHOTOS_DONE"|"LISTED";
 type Draft={key:string;anchorId:number|null;sku:string;sourceSku:string;title:string;quantity:number;cogs:string;condition:string;location:string;workflowStatus:Workflow;purchaseStore:string;purchaseDate:string;listDate:string;listPrice:string;dispositionNote:string;createdAt:string};
 
 const dateInput=(v:string|null|undefined)=>v?new Date(v).toISOString().slice(0,10):"";
-const disposition=(i:Item)=>{const d=i.dispositionStatus||"ACTIVE";if(d==="ACTIVE"&&i.quantity<=0)return"SOLD";if(d==="TRASHED")return"DISCARDED";return d};
+const disposition=(i:Item)=>{const d=i.dispositionStatus||"ACTIVE";if(d==="TRASHED")return"DISCARDED";return d};
 const workflow=(i:Item)=>{const d=disposition(i);if(d!=="ACTIVE")return d;return (i.workflowStatus||"LISTED").replaceAll("_"," ")};
 const rowColor=(i:Item)=>{const st=workflow(i);if(st==="DONATED"||st==="DISCARDED")return"#f4cccc";if(st==="SOLD")return"#cfe2f3";if(st==="LISTED")return"#d9ead3";if(st==="PHOTOS DONE")return"#fff2cc";return"#ffffff"};
 const cellStyle={width:"100%",minWidth:90,background:"transparent",border:"1px solid transparent",padding:"6px",outline:"none"} as const;
