@@ -43,11 +43,6 @@ export async function GET(req:NextRequest){
     if(ebayHits.length===1){duplicates++;continue}
     if(ebayHits.length>1){ambiguous++;details.push({product:r.p,customSku:r.cs,ebayItemId:r.eb,reason:"duplicate ebay id",matches:ebayHits});continue}
 
-    // A matching source/custom SKU + normalized title is the strongest evidence that
-    // Flipwise is describing an RH item we already own. If there is exactly one match,
-    // attach the new eBay listing to that item instead of creating an FW26 duplicate.
-    // If several RH rows legitimately share that source/title (multiple physical units),
-    // stop as ambiguous rather than guessing which unit owns the listing.
     const sourceTitleHits=cs&&t?(bySourceTitle.get(`${cs}|${t}`)||[]):[];
     if(sourceTitleHits.length===1){
       if(eb)await attachEbay(sourceTitleHits[0],r,eb);else duplicates++;
@@ -65,9 +60,6 @@ export async function GET(req:NextRequest){
     }
     if(composite.size>1){ambiguous++;details.push({product:r.p,customSku:r.cs,ebayItemId:r.eb,reason:"composite match",matches:[...composite]});continue}
 
-    // Without a marketplace ID, a reused RH/custom SKU is still useful duplicate evidence.
-    // With a marketplace ID we only create new inventory after the stronger source+title
-    // and purchase composites above fail, preventing listings from spawning duplicate items.
     if(!eb){
       const skuHits=new Set<number>();
       if(cs){for(const id of bySku.get(cs)||[])skuHits.add(id);for(const id of bySource.get(cs)||[])skuHits.add(id)}
@@ -80,7 +72,7 @@ export async function GET(req:NextRequest){
     const donated=clean(r.dn),discarded=clean(r.dd); const qty=Math.max(0,Number(r.qr??r.qp??1)||0);
     const item=await prisma.inventoryItem.create({data:{
       sku,sourceSku:cs||null,title:clean(r.p)||"Untitled Flipwise item",quantity:qty,
-      unlisted:!clean(r.ld),workflowStatus:clean(r.ld)?"LISTED":"NEEDS_PHOTOS",
+      unlisted:qty<=0||!clean(r.ld),workflowStatus:clean(r.ld)?"LISTED":"NEEDS_PHOTOS",
       dispositionStatus:discarded?"TRASHED":donated?"DONATED":"ACTIVE",
       disposedAt:discarded?new Date(discarded):donated?new Date(donated):null,
       dispositionNote:clean(r.n)||null,cogs:c,location:clean(r.loc)||null,purchaseStore:clean(r.st)||null,
