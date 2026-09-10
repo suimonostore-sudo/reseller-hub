@@ -27,7 +27,7 @@ function pick(o:any,...keys:string[]){for(const k of keys)if(o?.[k]!=null)return
 function linesFrom(o:any):any[]{for(const k of ["items","lineItems","line_items"])if(Array.isArray(o?.[k])&&o[k].length)return o[k];return [o]}
 function platform(v:any){const s=norm(v).replace(/\s/g,"");return s==="ebay"?"EBAY":s==="poshmark"?"POSHMARK":s==="mercari"?"MERCARI":s==="depop"?"DEPOP":null}
 function num(...v:any[]){for(const x of v){if(x===null||x===undefined||x==="")continue;const n=Number(x);if(Number.isFinite(n))return n}return null}
-function monthWindows(){const out:{start:Date,end:Date,label:string}[]=[];const now=new Date();for(let m=0;m<=now.getUTCMonth();m++){const start=new Date(Date.UTC(2026,m,1));const end=new Date(Math.min(Date.UTC(2026,m+1,1)-1,now.getTime()));out.push({start,end,label:`2026-${String(m+1).padStart(2,"0")}`})}return out}
+function monthWindows(only?:number){const out:{start:Date,end:Date,label:string}[]=[];const now=new Date();for(let m=0;m<=now.getUTCMonth();m++){if(only!=null&&m!==only-1)continue;const start=new Date(Date.UTC(2026,m,1));const end=new Date(Math.min(Date.UTC(2026,m+1,1)-1,now.getTime()));out.push({start,end,label:`2026-${String(m+1).padStart(2,"0")}`})}return out}
 function niftyOrderIdentity(o:any){const p=platform(pick(o,"marketplace","platform"))||"?";const ext=orderKey(pick(o,"externalMarketplaceOrderId","external_marketplace_order_id","externalOrderId","external_order_id","orderId","order_id"));const id=String(pick(o,"id","orderUuid","order_uuid")||"");const sold=String(pick(o,"soldAt","sold_at")||"");return ext?`${p}:${ext}`:id?`id:${id}`:`${p}:${sold}:${norm(linesFrom(o)[0]?.title)}`}
 
 const storeAliases:[string,string[]][]=[
