@@ -15,10 +15,10 @@ export class PrismaOAuthClientProvider implements OAuthClientProvider{
   constructor(private readonly _redirectUrl:string,private readonly _metadata:OAuthClientMetadata,public readonly clientMetadataUrl?:string){validateClientMetadataUrl(clientMetadataUrl)}
   get redirectUrl(){return this._redirectUrl}
   get clientMetadata(){return this._metadata}
-  async clientInformation(){const a=await account();if(!a?.refreshTokenEnc)return undefined;return JSON.parse(decryptSecret(a.refreshTokenEnc)) as OAuthClientInformationMixed}
+  async clientInformation(){const a=await account();if(!a?.refreshTokenEnc)return undefined;try{return JSON.parse(decryptSecret(a.refreshTokenEnc)) as OAuthClientInformationMixed}catch{return undefined}}
   async saveClientInformation(v:OAuthClientInformationMixed){const a=await account();await prisma.connectedAccount.upsert({where:{provider:PROVIDER},create:{provider:PROVIDER,refreshTokenEnc:encryptSecret(JSON.stringify(v))},update:{refreshTokenEnc:encryptSecret(JSON.stringify(v)),accessTokenEnc:a?.accessTokenEnc}})}
-  async tokens(){const a=await account();if(!a?.accessTokenEnc)return undefined;return JSON.parse(decryptSecret(a.accessTokenEnc)) as OAuthTokens}
-  async saveTokens(v:OAuthTokens){await prisma.connectedAccount.upsert({where:{provider:PROVIDER},create:{provider:PROVIDER,accessTokenEnc:encryptSecret(JSON.stringify(v)),connectedAt:new Date()},update:{accessTokenEnc:encryptSecret(JSON.stringify(v)),connectedAt:new Date()}})}
+  async tokens(){const a=await account();if(!a?.accessTokenEnc)return undefined;try{return JSON.parse(decryptSecret(a.accessTokenEnc)) as OAuthTokens}catch{return undefined}}
+  async saveTokens(v:OAuthTokens){const expiresIn=Number((v as any)?.expires_in);const tokenExpiresAt=Number.isFinite(expiresIn)&&expiresIn>0?new Date(Date.now()+expiresIn*1000):null;await prisma.connectedAccount.upsert({where:{provider:PROVIDER},create:{provider:PROVIDER,accessTokenEnc:encryptSecret(JSON.stringify(v)),connectedAt:new Date(),tokenExpiresAt},update:{accessTokenEnc:encryptSecret(JSON.stringify(v)),connectedAt:new Date(),tokenExpiresAt}})}
   redirectToAuthorization(url:URL){this._redirect=url}
   takeRedirect(){return this._redirect}
   async meta():Promise<StoredMeta>{const a=await account();if(!a?.scopes)return {};try{return JSON.parse(a.scopes)}catch{return {}}}
@@ -30,11 +30,14 @@ export class PrismaOAuthClientProvider implements OAuthClientProvider{
   async invalidateCredentials(scope:"all"|"client"|"tokens"|"verifier"|"discovery"){
     const a=await account();if(!a)return;
     let access=a.accessTokenEnc,refresh=a.refreshTokenEnc,m=await this.meta();
+    // The MCP client may invalidate an expired access token before attempting a
+    // refresh. Preserve the separately stored dynamic client registration so
+    // the refresh_token grant can still authenticate the registered client.
     if(scope==="all"||scope==="tokens")access=null;
     if(scope==="all"||scope==="client")refresh=null;
     if(scope==="all"||scope==="verifier")delete m.codeVerifier;
     if(scope==="all"||scope==="discovery")delete m.discoveryState;
-    await prisma.connectedAccount.update({where:{provider:PROVIDER},data:{accessTokenEnc:access,refreshTokenEnc:refresh,scopes:JSON.stringify(m)}})
+    await prisma.connectedAccount.update({where:{provider:PROVIDER},data:{accessTokenEnc:access,refreshTokenEnc:refresh,tokenExpiresAt:(scope==="all"||scope==="tokens")?null:a.tokenExpiresAt,scopes:JSON.stringify(m)}})
   }
 }
 
