@@ -44,10 +44,10 @@ export class PrismaOAuthClientProvider implements OAuthClientProvider{
 async function refreshExpiredTokens(provider:PrismaOAuthClientProvider){
   const a=await account();if(!a?.accessTokenEnc||!a?.tokenExpiresAt||a.tokenExpiresAt.getTime()>Date.now()+30_000)return;
   let old:any;try{old=JSON.parse(decryptSecret(a.accessTokenEnc))}catch{return}
-  if(!old?.refresh_token){console.error("Nifty refresh unavailable: saved OAuth token has no refresh_token");return;}
-  const info:any=await provider.clientInformation();const meta:any=(await provider.discoveryState())?.authorizationServerMetadata;const endpoint=meta?.token_endpoint;if(!endpoint||!info?.client_id){console.error("Nifty refresh unavailable",{hasEndpoint:!!endpoint,hasClientId:!!info?.client_id});return;}
+  if(!old?.refresh_token)throw new Error("NIFTY_REFRESH_MISSING_TOKEN");
+  const info:any=await provider.clientInformation();const meta:any=(await provider.discoveryState())?.authorizationServerMetadata;const endpoint=meta?.token_endpoint;if(!endpoint)throw new Error("NIFTY_REFRESH_MISSING_ENDPOINT");if(!info?.client_id)throw new Error("NIFTY_REFRESH_MISSING_CLIENT");
   const body=new URLSearchParams({grant_type:"refresh_token",refresh_token:String(old.refresh_token),client_id:String(info.client_id)});if(info.client_secret)body.set("client_secret",String(info.client_secret));
-  const res=await fetch(endpoint,{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded","accept":"application/json"},body,cache:"no-store"});if(!res.ok){console.error("Nifty refresh failed",res.status,await res.text());return;}
+  const res=await fetch(endpoint,{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded","accept":"application/json"},body,cache:"no-store"});if(!res.ok){const detail=(await res.text()).slice(0,300);throw new Error(`NIFTY_REFRESH_HTTP_${res.status}:${detail}`);}
   const fresh:any=await res.json();if(!fresh?.access_token)return;if(!fresh.refresh_token)fresh.refresh_token=old.refresh_token;await provider.saveTokens(fresh as OAuthTokens);
 }
 
