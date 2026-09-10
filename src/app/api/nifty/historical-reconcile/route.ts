@@ -49,7 +49,7 @@ function parseSku(rawSku:string,lineCogs:any){const raw=String(rawSku||"").trim(
 }
 function referenceTokens(v:any){return String(v||"").split(/[^0-9]+/).filter(x=>/^\d{3,5}$/.test(x)).map(x=>String(Number(x)))}
 function metadataScore(inv:any,parsed:any,niftyTitle:string){let score=0;const reasons:string[]=[];const invStore=storeKey(inv.purchaseStore),invDate=dayKey(inv.purchaseDate),invCost=num(inv.cogs);if(parsed.date&&invDate===parsed.date){score+=4;reasons.push("date")}if(parsed.store&&invStore===parsed.store){score+=4;reasons.push("store")}if(parsed.cost!=null&&moneyEq(invCost,parsed.cost)){score+=4;reasons.push("cost")}
- const invRefs=new Set([...referenceTokens(inv.sourceSku),...referenceTokens(inv.sku)]);const refHit=parsed.refs.some((r:string)=>invRefs.has(r));if(refHit){score+=5;reasons.push("reference")}
+ const invRefs=new Set([...referenceTokens(inv.sourceSku),...referenceTokens(inv.sku)]);const refHit=parsed.refs.some((r:string)=>invRefs.has(r));const refConflict=parsed.refs.length>0&&invRefs.size>0&&!refHit;if(refHit){score+=5;reasons.push("reference")}if(refConflict){score-=100;reasons.push("reference_conflict")}
  const t=titleScore(inv.title,niftyTitle);if(t>=.65){score+=2;reasons.push("title")}else if(t>=.35){score+=1;reasons.push("title_weak")}
  if(sizeConflict(inv.title,niftyTitle)){score-=4;reasons.push("size_conflict")}if(genderConflict(inv.title,niftyTitle)){score-=3;reasons.push("gender_conflict")}if(categoryConflict(inv.title,niftyTitle)){score-=3;reasons.push("category_conflict")}
  return {score,reasons,titleScore:t,invStore,invDate,invCost,refHit};
