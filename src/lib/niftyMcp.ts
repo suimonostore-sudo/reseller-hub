@@ -17,7 +17,7 @@ export class PrismaOAuthClientProvider implements OAuthClientProvider{
   get clientMetadata(){return this._metadata}
   async clientInformation(){const a=await account();if(!a?.refreshTokenEnc)return undefined;try{return JSON.parse(decryptSecret(a.refreshTokenEnc)) as OAuthClientInformationMixed}catch{return undefined}}
   async saveClientInformation(v:OAuthClientInformationMixed){const a=await account();await prisma.connectedAccount.upsert({where:{provider:PROVIDER},create:{provider:PROVIDER,refreshTokenEnc:encryptSecret(JSON.stringify(v))},update:{refreshTokenEnc:encryptSecret(JSON.stringify(v)),accessTokenEnc:a?.accessTokenEnc}})}
-  async tokens(){const a=await account();if(!a?.accessTokenEnc)return undefined;try{return JSON.parse(decryptSecret(a.accessTokenEnc)) as OAuthTokens}catch{return undefined}}
+  async tokens(){const a=await account();if(!a?.accessTokenEnc)return undefined;try{const t=JSON.parse(decryptSecret(a.accessTokenEnc)) as OAuthTokens;return t}catch{return undefined}}
   async saveTokens(v:OAuthTokens){const expiresIn=Number((v as any)?.expires_in);const tokenExpiresAt=Number.isFinite(expiresIn)&&expiresIn>0?new Date(Date.now()+expiresIn*1000):null;await prisma.connectedAccount.upsert({where:{provider:PROVIDER},create:{provider:PROVIDER,accessTokenEnc:encryptSecret(JSON.stringify(v)),connectedAt:new Date(),tokenExpiresAt},update:{accessTokenEnc:encryptSecret(JSON.stringify(v)),connectedAt:new Date(),tokenExpiresAt}})}
   redirectToAuthorization(url:URL){this._redirect=url}
   takeRedirect(){return this._redirect}
@@ -41,11 +41,21 @@ export class PrismaOAuthClientProvider implements OAuthClientProvider{
   }
 }
 
+async function refreshExpiredTokens(provider:PrismaOAuthClientProvider){
+  const a=await account();if(!a?.accessTokenEnc||!a?.tokenExpiresAt||a.tokenExpiresAt.getTime()>Date.now()+30_000)return;
+  let old:any;try{old=JSON.parse(decryptSecret(a.accessTokenEnc))}catch{return}
+  if(!old?.refresh_token)return;
+  const info:any=await provider.clientInformation();const meta:any=(await provider.discoveryState())?.authorizationServerMetadata;const endpoint=meta?.token_endpoint;if(!endpoint||!info?.client_id)return;
+  const body=new URLSearchParams({grant_type:"refresh_token",refresh_token:String(old.refresh_token),client_id:String(info.client_id)});if(info.client_secret)body.set("client_secret",String(info.client_secret));
+  const res=await fetch(endpoint,{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded","accept":"application/json"},body,cache:"no-store"});if(!res.ok)return;
+  const fresh:any=await res.json();if(!fresh?.access_token)return;if(!fresh.refresh_token)fresh.refresh_token=old.refresh_token;await provider.saveTokens(fresh as OAuthTokens);
+}
+
 export function callbackUrl(origin:string){return new URL("/api/auth/nifty/callback",origin).toString()}
 export function newProvider(origin:string){return new PrismaOAuthClientProvider(callbackUrl(origin),{client_name:"Reseller Hub",redirect_uris:[callbackUrl(origin)],grant_types:["authorization_code","refresh_token"],response_types:["code"],application_type:"web",token_endpoint_auth_method:"client_secret_post"})}
 
 export async function connectNifty(origin:string,finishParams?:URLSearchParams){
-  const provider=newProvider(origin);const client=new Client({name:"reseller-hub",version:"1.0.0"},{capabilities:{}});let transport=new StreamableHTTPClientTransport(new URL(NIFTY_MCP_URL),{authProvider:provider});
+  const provider=newProvider(origin);if(!finishParams)await refreshExpiredTokens(provider);const client=new Client({name:"reseller-hub",version:"1.0.0"},{capabilities:{}});let transport=new StreamableHTTPClientTransport(new URL(NIFTY_MCP_URL),{authProvider:provider});
   if(finishParams){await transport.finishAuth(finishParams);transport=new StreamableHTTPClientTransport(new URL(NIFTY_MCP_URL),{authProvider:provider})}
   try{await client.connect(transport);return {client,provider,transport,authorizationUrl:null as URL|null}}
   catch(e){if(e instanceof UnauthorizedError){return {client,provider,transport,authorizationUrl:provider.takeRedirect()||null}}throw e}
